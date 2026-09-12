@@ -1,0 +1,12 @@
+@import "tailwindcss";
+
+.panel-btn:hover {
+  filter: brightness(1.4);
+  border-color: currentColor !important;
+}
+
+.panel-btn.active {
+  filter: brightness(1.3);
+  border-color: currentColor !important;
+  background-color: color-mix(in srgb, currentColor 15%, transparent) !important;
+}
