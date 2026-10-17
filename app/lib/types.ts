@@ -87,3 +87,49 @@ export const BG_OPTIONS = [
 export function getTextColor(bgColor: string): string {
   return BG_OPTIONS.find((o) => o.bg === bgColor)?.text ?? "#1a1a1a";
 }
+
+// Chapters translated ahead in the background, on top of the one being opened
+export const PREFETCH_CHAPTERS = 3;
+
+export const ZH_TITLE_PROMPT = "Dịch tiêu đề truyện sau từ tiếng Trung sang tiếng Việt (ưu tiên Hán Việt) phổ thông dễ hiểu. KHÔNG được để lại bất kỳ chữ Trung Quốc nào. Giữ nguyên dấu '-' phân cách giữa tên truyện và tên chương. Chỉ trả về bản dịch, không giải thích.";
+
+export interface TranslatedChapter {
+  text: string;
+  title: string;
+  novelName: string;
+  chapterName: string;
+  prevUrl: string | null;
+  nextUrl: string | null;
+}
+
+export interface TranslateOptions {
+  apiKey: string;
+  model: string;
+  customPrompt?: string;
+  referenceLinks?: string;
+  reasoningEffort?: string;
+  webSearch?: boolean;
+}
+
+export type ChapterJobStatus = "fetching" | "translating" | "done" | "error";
+
+// A chapter being (or already) translated by a server-side background job
+export interface ChapterJob extends TranslatedChapter {
+  url: string;
+  jobId: string;
+  status: ChapterJobStatus;
+  lang: string;
+  error?: string;
+  updatedAt: number;
+}
+
+export function getTranslateOptions(settings: ReaderSettings): TranslateOptions {
+  return {
+    apiKey: getApiKeyForModel(settings),
+    model: settings.aiModel,
+    customPrompt: settings.customPrompt,
+    referenceLinks: settings.referenceLinks,
+    reasoningEffort: settings.reasoningEffort,
+    webSearch: isChatGPTModel(settings.aiModel) ? settings.webSearch : false,
+  };
+}

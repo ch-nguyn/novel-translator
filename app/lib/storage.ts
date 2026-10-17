@@ -4,6 +4,7 @@ const STORAGE_KEY = "novel-translator-chapters";
 const CURRENT_KEY = "novel-translator-current";
 const SETTINGS_KEY = "novel-translator-settings";
 const SCROLL_KEY = "novel-translator-scroll";
+const DEVICE_KEY = "novel-translator-device-id";
 const MAX_CHAPTERS_PER_NOVEL = 100;
 const REMOVED_MODEL_NAMES = new Set([
   "gpt-4.1",
@@ -224,4 +225,24 @@ export function extractChapterNumber(title: string): number | null {
     title.match(/(?:ch(?:ương|apter|ap)?|chương)\s*(\d+)/i) ||
     title.match(/(\d+)/);
   return match ? parseInt(match[1], 10) : null;
+}
+
+// Anonymous id that scopes this browser's background jobs on the server
+export function getDeviceId(): string {
+  let id = localStorage.getItem(DEVICE_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(DEVICE_KEY, id);
+  }
+  return id;
+}
+
+// Chapters of the same novel already saved locally: url → nextUrl
+export function getKnownChapters(url: string, excludeUrl?: string): Record<string, string | null> {
+  const novelSlug = extractNovelSlug(url);
+  return Object.fromEntries(
+    getSavedChapters()
+      .filter((c) => c.novelSlug === novelSlug && c.url !== excludeUrl)
+      .map((c) => [c.url, c.nextUrl])
+  );
 }

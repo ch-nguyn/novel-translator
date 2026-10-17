@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { DEFAULT_AI_MODEL, SavedChapter, ReaderSettings, getTextColor, getApiKeyForModel, isChatGPTModel } from "./lib/types";
+import { DEFAULT_AI_MODEL, SavedChapter, ReaderSettings, TranslatedChapter, getTextColor, getApiKeyForModel, getTranslateOptions } from "./lib/types";
 import {
   getSavedChapters,
   saveChapter,
@@ -13,9 +13,17 @@ import {
   saveSettings,
   getScrollPosition,
   saveScrollPosition,
-  deduplicateTitle,
+  getKnownChapters,
 } from "./lib/storage";
-import { fetchChapterContent, simplifyText, translateTitles } from "./lib/api";
+import { ChapterMeta, fetchChapterContent, translateChapterDirect } from "./lib/api";
+import {
+  acknowledgeJobChapters,
+  hasJobChapter,
+  saveTranslatedChapter,
+  startBackgroundJob,
+  syncFinishedJobs,
+  watchJobChapter,
+} from "./lib/jobs";
 import SettingsPanel from "./components/SettingsPanel";
 import AISettingsPanel from "./components/AISettingsPanel";
 import SavedChaptersList from "./components/SavedChaptersList";
@@ -71,6 +79,7 @@ export default function Home() {
     setSettings(getSettings());
 
     const currentUrl = getCurrentUrl();
+    const shownAtStart = !!currentUrl && getSavedChapters().some((c) => c.url === currentUrl);
     if (currentUrl) {
       const chapter = getSavedChapters().find((c) => c.url === currentUrl);
       if (chapter) {
@@ -89,6 +98,27 @@ export default function Home() {
         setUrl(currentUrl);
       }
     }
+
+    // Pull in chapters translated in the background while the app was closed
+    syncFinishedJobs().then(async (count) => {
+      if (count) setSavedChapters(getSavedChapters());
+      if (!currentUrl) return;
+      const chapter = getSavedChapters().find((c) => c.url === currentUrl);
+      if (chapter) {
+        // It finished while the app was closed
+        if (!shownAtStart) loadSavedChapter(chapter);
+      } else if (await hasJobChapter(currentUrl)) {
+        resumeJobChapter(currentUrl);
+      }
+    });
+
+    const handleVisible = () => {
+      if (document.visibilityState === "visible") {
+        syncFinishedJobs().then((count) => count && setSavedChapters(getSavedChapters()));
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisible);
+    return () => document.removeEventListener("visibilitychange", handleVisible);
   }, []);
 
   // Save scroll position on scroll (debounced) and show/hide scroll-to-top button
@@ -131,113 +161,105 @@ export default function Home() {
     setSavedChapters(getSavedChapters());
   }
 
+  // Shows a chapter while `produce` fetches/translates it, then saves it locally
+  async function runChapter(
+    fetchUrl: string,
+    produce: (
+      signal: AbortSignal,
+      onMeta: (meta: ChapterMeta) => void,
+      onText: (text: string) => void
+    ) => Promise<{ chapter: TranslatedChapter; fromJob: boolean }>
+  ): Promise<{ nextUrl: string | null } | null> {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
+    setFetching(true);
+    setSimplifiedText("");
+    setTitle("");
+    setNovelName("");
+    setChapterName("");
+    setPrevUrl(null);
+    setNextUrl(null);
+    setUrl(fetchUrl);
+    window.scrollTo(0, 0);
+
+    const onMeta = (meta: ChapterMeta) => {
+      setTitle(meta.title);
+      setNovelName(meta.novelName);
+      setChapterName(meta.chapterName);
+      setPrevUrl(meta.prevUrl);
+      setNextUrl(meta.nextUrl);
+      setFetching(false);
+      setSimplifying(true);
+    };
+
+    try {
+      const { chapter, fromJob } = await produce(controller.signal, onMeta, setSimplifiedText);
+      const savedTitle = saveTranslatedChapter(fetchUrl, chapter);
+      if (fromJob) await acknowledgeJobChapters([fetchUrl]);
+
+      setSimplifiedText(chapter.text);
+      setNovelName(chapter.novelName);
+      setChapterName(savedTitle);
+      setTitle(savedTitle);
+      setPrevUrl(chapter.prevUrl);
+      setNextUrl(chapter.nextUrl);
+      refreshSaved();
+      setCurrentUrl(fetchUrl);
+      return { nextUrl: chapter.nextUrl };
+    } catch (e: unknown) {
+      if (e instanceof Error && e.name !== "AbortError") {
+        setSimplifiedText(`Error: ${e.message}`);
+      }
+      return null;
+    } finally {
+      // A newer chapter may have taken over (and aborted this one); leave its loading state alone
+      if (abortRef.current === controller) {
+        setFetching(false);
+        setSimplifying(false);
+      }
+    }
+  }
+
   const handleFetchAndSimplify = useCallback(
     async (targetUrl?: string): Promise<{ nextUrl: string | null } | null> => {
       const fetchUrl = targetUrl || url;
       if (!fetchUrl.trim() || fetching || simplifying) return null;
 
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-
-      setFetching(true);
-      setSimplifiedText("");
-      setTitle("");
-      setNovelName("");
-      setChapterName("");
-      setPrevUrl(null);
-      setNextUrl(null);
-      if (targetUrl) setUrl(targetUrl);
-      window.scrollTo(0, 0);
-
-      let resultNextUrl: string | null = null;
-      let success = false;
-
-      try {
-        const data = await fetchChapterContent(fetchUrl, controller.signal);
-        let chapterTitle = data.title;
-
-        setTitle(chapterTitle);
-        setNovelName(data.novelName);
-        setChapterName(data.chapterName);
-        setPrevUrl(data.prevUrl);
-        setNextUrl(data.nextUrl);
-        resultNextUrl = data.nextUrl;
-        setFetching(false);
-        setSimplifying(true);
-
-        const result = await simplifyText(
-          data.text,
-          getApiKeyForModel(settings),
-          settings.aiModel,
-          data.lang,
-          controller.signal,
-          setSimplifiedText,
-          settings.customPrompt,
-          settings.referenceLinks,
-          settings.reasoningEffort,
-          isChatGPTModel(settings.aiModel) ? settings.webSearch : false
-        );
-
-        // Translate title if Chinese (single API call for both titles)
-        if (data.lang === "zh" && data.chapterName) {
-          try {
-            const translated = await translateTitles(
-              [data.chapterName, data.novelName],
-              getApiKeyForModel(settings),
-              settings.aiModel,
-              "Dịch tiêu đề truyện sau từ tiếng Trung sang tiếng Việt (ưu tiên Hán Việt) phổ thông dễ hiểu. KHÔNG được để lại bất kỳ chữ Trung Quốc nào. Giữ nguyên dấu '-' phân cách giữa tên truyện và tên chương. Chỉ trả về bản dịch, không giải thích."
-            );
-            const cName = translated[0] || data.chapterName;
-            const nName = translated[1] || data.novelName;
-            setChapterName(cName);
-            setNovelName(nName);
-            setTitle(cName);
-            data.chapterName = cName;
-            data.novelName = nName;
-          } catch { /* keep original */ }
+      const options = getTranslateOptions(settings);
+      return runChapter(fetchUrl, async (signal, onMeta, onText) => {
+        // Translate on the server so it keeps going (with the next chapters) if the app is closed
+        const jobId = await startBackgroundJob(fetchUrl, options, getKnownChapters(fetchUrl, fetchUrl), signal);
+        if (jobId) {
+          setCurrentUrl(fetchUrl);
+          return { chapter: await watchJobChapter(fetchUrl, jobId, signal, onMeta, onText), fromJob: true };
         }
-
-        const chapterSlug = extractNovelSlug(fetchUrl);
-        const dedupedTitle = deduplicateTitle(
-          data.chapterName || chapterTitle || fetchUrl,
-          chapterSlug
-        );
-        setChapterName(dedupedTitle);
-        setTitle(dedupedTitle);
-
-        saveChapter({
-          url: fetchUrl,
-          title: dedupedTitle,
-          novelName: data.novelName || "",
-          novelSlug: chapterSlug,
-          simplifiedText: result,
-          prevUrl: data.prevUrl,
-          nextUrl: data.nextUrl,
-          savedAt: Date.now(),
-        });
-        refreshSaved();
-        setCurrentUrl(fetchUrl);
-        success = true;
-      } catch (e: unknown) {
-        if (e instanceof Error && e.name !== "AbortError") {
-          setSimplifiedText(`Error: ${e.message}`);
-        }
-      } finally {
-        setFetching(false);
-        setSimplifying(false);
-      }
-
-      return success ? { nextUrl: resultNextUrl } : null;
+        return { chapter: await translateChapterDirect(fetchUrl, options, signal, onMeta, onText), fromJob: false };
+      });
     },
-    [url, fetching, simplifying, getApiKeyForModel(settings), settings.aiModel]
+    [url, fetching, simplifying, settings]
   );
+
+  // Shows a chapter that a background job is still translating
+  function resumeJobChapter(chapterUrl: string) {
+    return runChapter(chapterUrl, async (signal, onMeta, onText) => ({
+      chapter: await watchJobChapter(chapterUrl, null, signal, onMeta, onText),
+      fromJob: true,
+    }));
+  }
 
   async function navigateToChapter(targetUrl: string) {
     window.scrollTo(0, 0);
+    if (await syncFinishedJobs()) refreshSaved();
     const saved = getSavedChapters().find((c) => c.url === targetUrl);
     if (saved) {
       await loadSavedChapter(saved);
+      // Keep the following chapters translating ahead in the background
+      const options = getTranslateOptions(settings);
+      if (options.apiKey.trim()) {
+        startBackgroundJob(targetUrl, options, getKnownChapters(targetUrl)).catch(() => {});
+      }
     } else {
       await handleFetchAndSimplify(targetUrl);
     }

@@ -1,3 +1,5 @@
+import { TranslatedChapter, TranslateOptions, ZH_TITLE_PROMPT } from "./types";
+
 // Pricing per million tokens: [input, output] in USD
 // Models not listed here are considered free
 const MODEL_PRICING: Record<string, [number, number]> = {
@@ -163,4 +165,42 @@ export async function simplifyText(
   }
 
   return result;
+}
+
+export type ChapterMeta = Omit<TranslatedChapter, "text">;
+
+// Fetches and translates a chapter in this browser tab (used when background jobs are unavailable)
+export async function translateChapterDirect(
+  url: string,
+  options: TranslateOptions,
+  signal: AbortSignal,
+  onMeta: (meta: ChapterMeta) => void,
+  onText: (text: string) => void
+): Promise<TranslatedChapter> {
+  const data = await fetchChapterContent(url, signal);
+  onMeta(data);
+
+  const text = await simplifyText(
+    data.text,
+    options.apiKey,
+    options.model,
+    data.lang,
+    signal,
+    onText,
+    options.customPrompt,
+    options.referenceLinks,
+    options.reasoningEffort,
+    options.webSearch
+  );
+
+  let { title, novelName, chapterName } = data;
+  // Translate title if Chinese (single API call for both titles)
+  if (data.lang === "zh" && chapterName) {
+    const translated = await translateTitles([chapterName, novelName], options.apiKey, options.model, ZH_TITLE_PROMPT);
+    chapterName = translated[0] || chapterName;
+    novelName = translated[1] || novelName;
+    title = chapterName;
+  }
+
+  return { text, title, novelName, chapterName, prevUrl: data.prevUrl, nextUrl: data.nextUrl };
 }
