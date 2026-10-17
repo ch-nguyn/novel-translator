@@ -1,4 +1,5 @@
 import { createSimplifyStream } from "../../lib/server/simplify";
+import { STREAM_NONCE_HEADER } from "../../lib/stream";
 
 export async function POST(req: Request) {
   try {
@@ -15,7 +16,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const stream = await createSimplifyStream({
+    const { stream, nonce } = await createSimplifyStream({
       text,
       apiKey,
       model,
@@ -27,7 +28,7 @@ export async function POST(req: Request) {
     });
 
     return new Response(stream, {
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      headers: { "Content-Type": "text/plain; charset=utf-8", [STREAM_NONCE_HEADER]: nonce },
     });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Internal server error";

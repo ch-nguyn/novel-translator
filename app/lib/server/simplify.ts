@@ -1,4 +1,5 @@
-import { DEFAULT_AI_MODEL } from "../types";
+import { DEFAULT_AI_MODEL, isOpenAIReasoningModel } from "../types";
+import { endRecord, newStreamNonce, STREAM_ENDED_EARLY_ERROR, TokenUsage } from "../stream";
 
 const VI_PROMPT = `Bạn là biên tập viên chuyên viết lại truyện tiên hiệp/kiếm hiệp tiếng Việt (dịch từ tiếng Trung). Văn gốc thường lủng củng, ngữ pháp sai, từ ngữ khó hiểu. Nhiệm vụ của bạn là viết lại cho mượt mà, đúng văn phong cổ phong nhưng vẫn dễ đọc.
 
@@ -121,7 +122,143 @@ function getProvider(model: string): "openai" | "gemini" | "claude" | "openroute
 
 type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
-async function streamOpenAIResponses(apiKey: string, model: string, text: string, systemPrompt: string, effort: ReasoningEffort = "medium", webSearch = false) {
+const OUTPUT_LIMIT_ERROR =
+  "The model hit its output limit before finishing the chapter. Try again, lower the reasoning effort, or use a model with a larger output limit.";
+const stoppedError = (reason: string) => `The model stopped before finishing the chapter (${reason}).`;
+const REFUSAL_ERROR = "The model refused to translate this chapter.";
+
+interface ProviderRequest {
+  apiKey: string;
+  model: string;
+  text: string;
+  systemPrompt: string;
+  effort: ReasoningEffort;
+  webSearch: boolean;
+  signal?: AbortSignal;
+  // Authenticates the stream's terminal record (see app/lib/stream.ts)
+  nonce: string;
+}
+
+interface StreamState {
+  usage: TokenUsage;
+  // The provider reported a normal finish
+  finished: boolean;
+  // The model stopped early (output limit, refusal, provider error)
+  error: string | null;
+}
+
+// Provider-specific JSON payload of one SSE event
+type SseEvent = any;
+
+async function readProviderError(res: Response, provider: string): Promise<Error> {
+  const err = await res.json().catch(() => null);
+  return new Error(err?.error?.message || `${provider} error: ${res.status}`);
+}
+
+// Incremental Server-Sent Events parser (WHATWG spec): lines end in LF, CRLF or
+// CR; an event is dispatched at a blank line and its `data:` fields (optional
+// space after the colon) are joined with "\n". Other fields are ignored.
+class SseParser {
+  private buffer = "";
+  private data: string[] = [];
+  private afterCR = false;
+
+  constructor(private onData: (data: string) => void) {}
+
+  push(chunk: string) {
+    let start = 0;
+    for (let i = 0; i < chunk.length; i++) {
+      const c = chunk.charCodeAt(i);
+      // LF right after a CR completes a CRLF line ending already handled
+      if (this.afterCR) {
+        this.afterCR = false;
+        if (c === 10) {
+          start = i + 1;
+          continue;
+        }
+      }
+      if (c === 10 || c === 13) {
+        this.line(this.buffer + chunk.slice(start, i));
+        this.buffer = "";
+        start = i + 1;
+        this.afterCR = c === 13;
+      }
+    }
+    this.buffer += chunk.slice(start);
+  }
+
+  // The stream ended; dispatch an event that was not followed by a blank line
+  end() {
+    if (this.buffer) this.line(this.buffer);
+    this.buffer = "";
+    this.dispatch();
+  }
+
+  private line(line: string) {
+    if (line === "") return this.dispatch();
+    if (line.startsWith(":")) return;
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    let value = colon < 0 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "data") this.data.push(value);
+  }
+
+  private dispatch() {
+    if (this.data.length === 0) return;
+    const data = this.data.join("\n");
+    this.data = [];
+    this.onData(data);
+  }
+}
+
+// Re-emits a provider's SSE response as plain text followed by the terminal
+// record (see app/lib/stream.ts). A response that does not finish normally
+// always ends with an error in that record, so a cut-off chapter is never
+// mistaken for a complete one.
+function sseToTextStream(
+  res: Response,
+  nonce: string,
+  onEvent: (event: SseEvent, emit: (text: string) => void, state: StreamState) => void
+): ReadableStream {
+  return new ReadableStream({
+    async start(controller) {
+      const encoder = new TextEncoder();
+      const emit = (text: string) => controller.enqueue(encoder.encode(text));
+      const state: StreamState = { usage: { input: 0, output: 0 }, finished: false, error: null };
+      const parser = new SseParser((data) => {
+        if (data === "[DONE]") return;
+        let event: SseEvent;
+        try {
+          event = JSON.parse(data);
+        } catch {
+          return;
+        }
+        onEvent(event, emit, state);
+      });
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          parser.push(decoder.decode(value, { stream: true }));
+        }
+        parser.end();
+      } catch {
+        // A connection drop after the provider already reported its finish is harmless
+        if (!state.finished) state.error ??= STREAM_ENDED_EARLY_ERROR;
+      }
+
+      if (!state.error && !state.finished) state.error = STREAM_ENDED_EARLY_ERROR;
+      emit(endRecord(nonce, state.usage, state.error));
+      controller.close();
+    },
+  });
+}
+
+async function streamOpenAIResponses({ apiKey, model, text, systemPrompt, effort, webSearch, signal, nonce }: ProviderRequest) {
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -136,53 +273,45 @@ async function streamOpenAIResponses(apiKey: string, model: string, text: string
       reasoning: { effort },
       ...(webSearch ? { tools: [{ type: "web_search" }] } : {}),
     }),
+    signal,
   });
 
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error?.message || `OpenAI error: ${res.status}`);
-  }
+  if (!res.ok) throw await readProviderError(res, "OpenAI");
 
-  return new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let usage = { input: 0, output: 0 };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (!data || data === "[DONE]") continue;
-          try {
-            const json = JSON.parse(data);
-            if (json.type === "response.output_text.delta" && json.delta) {
-              controller.enqueue(encoder.encode(json.delta));
-            }
-            if (json.type === "response.completed" && json.response?.usage) {
-              usage.input = json.response.usage.input_tokens || 0;
-              usage.output = json.response.usage.output_tokens || 0;
-            }
-          } catch {
-            // skip
-          }
-        }
+  return sseToTextStream(res, nonce, (event, emit, state) => {
+    switch (event.type) {
+      case "response.output_text.delta":
+        if (event.delta) emit(event.delta);
+        break;
+      case "response.refusal.delta":
+      case "response.refusal.done":
+        state.error = REFUSAL_ERROR;
+        break;
+      case "response.completed":
+        state.finished = true;
+        break;
+      case "response.incomplete": {
+        const reason = event.response?.incomplete_details?.reason;
+        state.error = reason === "max_output_tokens" ? OUTPUT_LIMIT_ERROR : stoppedError(reason || "incomplete");
+        break;
       }
-      controller.enqueue(encoder.encode(`\n<!--USAGE:${JSON.stringify(usage)}-->`));
-      controller.close();
-    },
+      case "response.failed":
+        state.error = event.response?.error?.message || stoppedError("failed");
+        break;
+      case "error":
+        state.error = event.message || stoppedError("error");
+        break;
+    }
+    const usage = event.response?.usage;
+    if (usage) state.usage = { input: usage.input_tokens || 0, output: usage.output_tokens || 0 };
   });
 }
 
-async function streamOpenAI(apiKey: string, model: string, text: string, systemPrompt: string, baseUrl = "https://api.openai.com/v1", extraBody: Record<string, unknown> = {}) {
+async function streamOpenAI(
+  { apiKey, model, text, systemPrompt, signal, nonce }: ProviderRequest,
+  baseUrl = "https://api.openai.com/v1",
+  extraBody: Record<string, unknown> = {}
+) {
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -200,48 +329,24 @@ async function streamOpenAI(apiKey: string, model: string, text: string, systemP
       temperature: 0.3,
       ...extraBody,
     }),
+    signal,
   });
 
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error?.message || `OpenAI error: ${res.status}`);
-  }
+  if (!res.ok) throw await readProviderError(res, "OpenAI");
 
-  return new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let usage = { input: 0, output: 0 };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") break;
-          try {
-            const json = JSON.parse(data);
-            const content = json.choices?.[0]?.delta?.content;
-            if (content) controller.enqueue(encoder.encode(content));
-            if (json.usage) {
-              usage.input = json.usage.prompt_tokens || 0;
-              usage.output = json.usage.completion_tokens || 0;
-            }
-          } catch {
-            // skip
-          }
-        }
-      }
-      controller.enqueue(encoder.encode(`\n<!--USAGE:${JSON.stringify(usage)}-->`));
-      controller.close();
-    },
+  return sseToTextStream(res, nonce, (event, emit, state) => {
+    const choice = event.choices?.[0];
+    if (choice?.delta?.content) emit(choice.delta.content);
+    if (choice?.delta?.refusal) state.error = REFUSAL_ERROR;
+    const reason = choice?.finish_reason;
+    if (reason === "length") state.error = OUTPUT_LIMIT_ERROR;
+    else if (reason === "content_filter") state.error = stoppedError(reason);
+    else if (reason) state.finished = true;
+    // OpenRouter reports provider failures mid-stream as an error object
+    if (event.error) state.error = event.error.message || stoppedError("error");
+    if (event.usage) {
+      state.usage = { input: event.usage.prompt_tokens || 0, output: event.usage.completion_tokens || 0 };
+    }
   });
 }
 
@@ -254,12 +359,12 @@ function geminiThinkingBudget(effort: ReasoningEffort): number {
   }
 }
 
-async function streamGemini(apiKey: string, model: string, text: string, systemPrompt: string, effort: ReasoningEffort = "medium", webSearch = false) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse&key=${apiKey}`;
+async function streamGemini({ apiKey, model, text, systemPrompt, effort, webSearch, signal, nonce }: ProviderRequest) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
 
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
     body: JSON.stringify({
       system_instruction: { parts: [{ text: systemPrompt }] },
       contents: [{ parts: [{ text }] }],
@@ -269,54 +374,34 @@ async function streamGemini(apiKey: string, model: string, text: string, systemP
       },
       ...(webSearch ? { tools: [{ googleSearch: {} }] } : {}),
     }),
+    signal,
   });
 
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error?.message || `Gemini error: ${res.status}`);
-  }
+  if (!res.ok) throw await readProviderError(res, "Gemini");
 
-  return new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let usage = { input: 0, output: 0 };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const json = JSON.parse(line.slice(6));
-            const parts = json.candidates?.[0]?.content?.parts;
-            if (parts) {
-              for (const part of parts) {
-                if (part.text) controller.enqueue(encoder.encode(part.text));
-              }
-            }
-            if (json.usageMetadata) {
-              usage.input = json.usageMetadata.promptTokenCount || 0;
-              usage.output = json.usageMetadata.candidatesTokenCount || 0;
-            }
-          } catch {
-            // skip
-          }
-        }
-      }
-      controller.enqueue(encoder.encode(`\n<!--USAGE:${JSON.stringify(usage)}-->`));
-      controller.close();
-    },
+  return sseToTextStream(res, nonce, (event, emit, state) => {
+    const candidate = event.candidates?.[0];
+    for (const part of candidate?.content?.parts ?? []) {
+      if (part.text && !part.thought) emit(part.text);
+    }
+    const reason = candidate?.finishReason;
+    if (reason === "MAX_TOKENS") state.error = OUTPUT_LIMIT_ERROR;
+    else if (reason === "STOP") state.finished = true;
+    else if (reason) state.error = stoppedError(reason);
+    if (event.error) state.error = event.error.message || stoppedError("error");
+    if (event.usageMetadata) {
+      state.usage = {
+        input: event.usageMetadata.promptTokenCount || 0,
+        output: event.usageMetadata.candidatesTokenCount || 0,
+      };
+    }
   });
 }
 
-async function streamClaude(apiKey: string, model: string, text: string, systemPrompt: string, webSearch = false) {
+// Anthropic stop reasons that mean the model finished its answer
+const CLAUDE_FINISHED = new Set(["end_turn", "stop_sequence"]);
+
+async function streamClaude({ apiKey, model, text, systemPrompt, webSearch, signal, nonce }: ProviderRequest) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -326,56 +411,43 @@ async function streamClaude(apiKey: string, model: string, text: string, systemP
     },
     body: JSON.stringify({
       model,
-      max_tokens: 12000,
+      // Includes the thinking budget; a long chapter needs well over 10k output tokens
+      max_tokens: 32000,
       stream: true,
       system: systemPrompt,
       messages: [{ role: "user", content: text }],
       thinking: { type: "enabled", budget_tokens: 4000 },
       ...(webSearch ? { tools: [{ type: "web_search_20250305", name: "web_search" }] } : {}),
     }),
+    signal,
   });
 
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error?.message || `Claude error: ${res.status}`);
-  }
+  if (!res.ok) throw await readProviderError(res, "Claude");
 
-  return new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let usage = { input: 0, output: 0 };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          try {
-            const json = JSON.parse(line.slice(6));
-            if (json.type === "content_block_delta" && json.delta?.text) {
-              controller.enqueue(encoder.encode(json.delta.text));
-            }
-            if (json.type === "message_start" && json.message?.usage) {
-              usage.input = json.message.usage.input_tokens || 0;
-            }
-            if (json.type === "message_delta" && json.usage) {
-              usage.output = json.usage.output_tokens || 0;
-            }
-          } catch {
-            // skip
-          }
-        }
-      }
-      controller.enqueue(encoder.encode(`\n<!--USAGE:${JSON.stringify(usage)}-->`));
-      controller.close();
-    },
+  let stopReason: string | null = null;
+  return sseToTextStream(res, nonce, (event, emit, state) => {
+    switch (event.type) {
+      case "content_block_delta":
+        if (event.delta?.type === "text_delta" && event.delta.text) emit(event.delta.text);
+        break;
+      case "message_start":
+        state.usage.input = event.message?.usage?.input_tokens || 0;
+        break;
+      case "message_delta":
+        if (event.usage) state.usage.output = event.usage.output_tokens || 0;
+        if (event.delta?.stop_reason) stopReason = event.delta.stop_reason;
+        break;
+      case "message_stop":
+        // Anything else (max_tokens, refusal, pause_turn from server tools…) is unfinished
+        if (stopReason && CLAUDE_FINISHED.has(stopReason)) state.finished = true;
+        else if (stopReason === "max_tokens") state.error = OUTPUT_LIMIT_ERROR;
+        else if (stopReason === "refusal") state.error = REFUSAL_ERROR;
+        else state.error = stoppedError(stopReason || "no stop reason");
+        break;
+      case "error":
+        state.error = event.error?.message || stoppedError("error");
+        break;
+    }
   });
 }
 
@@ -388,9 +460,18 @@ export interface SimplifyParams {
   referenceLinks?: string;
   reasoningEffort?: string;
   webSearch?: boolean;
+  // Aborts the provider request
+  signal?: AbortSignal;
 }
 
-// Returns a text stream of the rewritten chapter, terminated by a `<!--USAGE:{...}-->` marker
+// Returns a text stream of the rewritten chapter followed by the terminal record
+// (see app/lib/stream.ts), and the nonce that authenticates that record
+export interface SimplifyStream {
+  stream: ReadableStream;
+  // Pass to parseTranslationStream to authenticate the terminal record
+  nonce: string;
+}
+
 export async function createSimplifyStream({
   text,
   apiKey,
@@ -400,8 +481,10 @@ export async function createSimplifyStream({
   referenceLinks,
   reasoningEffort,
   webSearch,
-}: SimplifyParams): Promise<ReadableStream> {
-  const provider = getProvider(model || DEFAULT_AI_MODEL);
+  signal,
+}: SimplifyParams): Promise<SimplifyStream> {
+  const resolvedModel = model || DEFAULT_AI_MODEL;
+  const provider = getProvider(resolvedModel);
   const validEfforts: ReasoningEffort[] = ["low", "medium", "high", "xhigh"];
   const effort: ReasoningEffort = validEfforts.includes(reasoningEffort as ReasoningEffort)
     ? (reasoningEffort as ReasoningEffort)
@@ -417,21 +500,21 @@ export async function createSimplifyStream({
     }
   }
 
+  const nonce = newStreamNonce();
+  const request: ProviderRequest = { apiKey, model: resolvedModel, text, systemPrompt, effort, webSearch: !!webSearch, signal, nonce };
+  let stream: ReadableStream;
   switch (provider) {
     case "gemini":
-      return streamGemini(apiKey, model!, text, systemPrompt, effort, !!webSearch);
+      stream = await streamGemini(request);
+      break;
     case "claude":
-      return streamClaude(apiKey, model!, text, systemPrompt, !!webSearch);
+      stream = await streamClaude(request);
+      break;
     case "openrouter":
-      return streamOpenAI(apiKey, model!, text, systemPrompt, "https://openrouter.ai/api/v1", {
-        reasoning: { effort },
-      });
+      stream = await streamOpenAI(request, "https://openrouter.ai/api/v1", { reasoning: { effort } });
+      break;
     default:
-      if (model?.startsWith("gpt-5")) {
-        return streamOpenAIResponses(apiKey, model, text, systemPrompt, effort, !!webSearch);
-      }
-      return streamOpenAI(apiKey, model || DEFAULT_AI_MODEL, text, systemPrompt);
+      stream = isOpenAIReasoningModel(resolvedModel) ? await streamOpenAIResponses(request) : await streamOpenAI(request);
   }
+  return { stream, nonce };
 }
-
-export const USAGE_MARKER_REGEX = /\n<!--USAGE:(\{.*?\})-->/;

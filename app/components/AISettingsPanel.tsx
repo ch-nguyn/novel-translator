@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ReaderSettings, AI_MODEL_OPTIONS, REASONING_EFFORT_OPTIONS, ReasoningEffort, getProviderForModel, isChatGPTModel } from "../lib/types";
+import { ReaderSettings, AI_MODEL_OPTIONS, REASONING_EFFORT_OPTIONS, ReasoningEffort, getProviderForModel, isOpenAIReasoningModel } from "../lib/types";
 import { Translations } from "../lib/i18n";
 
 interface Props {
@@ -42,7 +42,7 @@ export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Pr
     high: t.reasoningHigh,
     xhigh: t.reasoningExtraHigh,
   };
-  const isChatGPT = isChatGPTModel(settings.aiModel);
+  const isChatGPT = isOpenAIReasoningModel(settings.aiModel);
 
   useEffect(() => {
     if (!modelMenuOpen) return;
@@ -59,7 +59,7 @@ export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Pr
   }, [modelMenuOpen]);
 
   function updateModel(model: string) {
-    onUpdate({ aiModel: model, ...(isChatGPTModel(model) ? {} : { webSearch: false }) });
+    onUpdate({ aiModel: model, ...(isOpenAIReasoningModel(model) ? {} : { webSearch: false }) });
     setModelMenuOpen(false);
   }
 
@@ -85,7 +85,7 @@ export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Pr
                 onFocus={() => setModelMenuOpen(true)}
                 onChange={(e) => {
                   const model = e.target.value;
-                  onUpdate({ aiModel: model, ...(isChatGPTModel(model) ? {} : { webSearch: false }) });
+                  onUpdate({ aiModel: model, ...(isOpenAIReasoningModel(model) ? {} : { webSearch: false }) });
                   setModelMenuOpen(true);
                 }}
                 placeholder={t.aiModelPlaceholder}

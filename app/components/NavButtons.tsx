@@ -3,7 +3,7 @@
 interface Props {
   prevUrl: string | null;
   nextUrl: string | null;
-  disabled: boolean;
+  canNavigate: (url: string) => boolean;
   textColor: string;
   prevLabel: string;
   nextLabel: string;
@@ -13,7 +13,7 @@ interface Props {
 export default function NavButtons({
   prevUrl,
   nextUrl,
-  disabled,
+  canNavigate,
   textColor,
   prevLabel,
   nextLabel,
@@ -23,7 +23,7 @@ export default function NavButtons({
     <div className="flex justify-between py-3">
       <button
         onClick={() => prevUrl && onNavigate(prevUrl)}
-        disabled={!prevUrl || disabled}
+        disabled={!prevUrl || !canNavigate(prevUrl)}
         className="panel-btn px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium border transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
         style={{ borderColor: textColor + "30", color: textColor }}
       >
@@ -31,7 +31,7 @@ export default function NavButtons({
       </button>
       <button
         onClick={() => nextUrl && onNavigate(nextUrl)}
-        disabled={!nextUrl || disabled}
+        disabled={!nextUrl || !canNavigate(nextUrl)}
         className="panel-btn px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium border transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
         style={{ borderColor: textColor + "30", color: textColor }}
       >

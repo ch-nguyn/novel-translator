@@ -5,6 +5,10 @@ const CURRENT_KEY = "novel-translator-current";
 const SETTINGS_KEY = "novel-translator-settings";
 const SCROLL_KEY = "novel-translator-scroll";
 const DEVICE_KEY = "novel-translator-device-id";
+const CLEARED_NOVELS_KEY = "novel-translator-cleared-novels";
+const PENDING_WINDOW_KEY = "novel-translator-pending-window";
+const PENDING_WINDOW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MAX_SCROLL_POSITIONS = 300;
 const MAX_CHAPTERS_PER_NOVEL = 100;
 const REMOVED_MODEL_NAMES = new Set([
   "gpt-4.1",
@@ -110,7 +114,43 @@ export function deduplicateTitle(title: string, novelSlug: string, chapters?: Sa
   return sameNameCount > 0 ? `${title} (${sameNameCount + 1})` : title;
 }
 
-export function saveChapter(chapter: SavedChapter) {
+// Browser storage cannot fit a chapter even after removing every other one
+export class StorageFullError extends Error {
+  constructor() {
+    super("Browser storage is full. Clear some novels and try again.");
+    this.name = "StorageFullError";
+  }
+}
+
+// Runs `fn` while holding a lock shared by every tab of the app, so two tabs
+// never interleave a read-modify-write of the saved chapters
+export async function withStorageLock<T>(fn: () => Promise<T> | T): Promise<T> {
+  if (typeof navigator !== "undefined" && navigator.locks) {
+    return navigator.locks.request("novel-translator-storage", async () => fn());
+  }
+  return fn();
+}
+
+function isQuotaError(e: unknown): boolean {
+  return e instanceof DOMException && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED");
+}
+
+// Least recently saved chapter to drop when storage is full: other novels
+// first, then older chapters of the same novel. Never the one being saved.
+function pickEvictionVictim(chapters: SavedChapter[], keep: SavedChapter): SavedChapter | null {
+  const candidates = chapters.filter((c) => c.url !== keep.url);
+  if (candidates.length === 0) return null;
+  return candidates.reduce((victim, c) => {
+    const victimOther = victim.novelSlug !== keep.novelSlug;
+    const cOther = c.novelSlug !== keep.novelSlug;
+    if (cOther !== victimOther) return cOther ? c : victim;
+    return c.savedAt < victim.savedAt ? c : victim;
+  });
+}
+
+// Saves a chapter. When browser storage is full, the oldest chapters are
+// removed until it fits; returns how many were removed.
+export function saveChapter(chapter: SavedChapter): number {
   let chapters = getSavedChapters();
   const existing = chapters.findIndex((c) => c.url === chapter.url);
   if (existing >= 0) {
@@ -128,7 +168,19 @@ export function saveChapter(chapter: SavedChapter) {
     chapters = chapters.filter((c) => c.novelSlug === chapter.novelSlug);
   }
 
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
+  let evicted = 0;
+  while (true) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
+      return evicted;
+    } catch (e) {
+      if (!isQuotaError(e)) throw e;
+      const victim = pickEvictionVictim(chapters, chapter);
+      if (!victim) throw new StorageFullError();
+      chapters = chapters.filter((c) => c !== victim);
+      evicted++;
+    }
+  }
 }
 
 function limitNovelChapters(chapters: SavedChapter[], novelSlug: string): SavedChapter[] {
@@ -140,18 +192,34 @@ function limitNovelChapters(chapters: SavedChapter[], novelSlug: string): SavedC
   return chapters.filter((c) => c.novelSlug !== novelSlug || !toRemove.has(c.url));
 }
 
-export function deleteChapter(url: string) {
-  const chapters = getSavedChapters().filter((c) => c.url !== url);
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
-}
-
 export function clearNovelChapters(novelSlug: string) {
   const chapters = getSavedChapters().filter((c) => c.novelSlug !== novelSlug);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
+  const cleared = getClearedNovels();
+  cleared.add(novelSlug);
+  localStorage.setItem(CLEARED_NOVELS_KEY, JSON.stringify([...cleared]));
   // Clear current URL if it belonged to this novel
   const currentUrl = getCurrentUrl();
   if (currentUrl && extractNovelSlug(currentUrl) === novelSlug) {
     localStorage.removeItem(CURRENT_KEY);
+  }
+}
+
+// Novels the user cleared. Chapters of these that a background job finishes
+// later are discarded instead of being saved again.
+export function getClearedNovels(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(CLEARED_NOVELS_KEY) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+// The user is reading this novel again
+export function reviveNovel(novelSlug: string) {
+  const cleared = getClearedNovels();
+  if (cleared.delete(novelSlug)) {
+    localStorage.setItem(CLEARED_NOVELS_KEY, JSON.stringify([...cleared]));
   }
 }
 
@@ -160,7 +228,11 @@ export function getCurrentUrl(): string | null {
 }
 
 export function setCurrentUrl(url: string) {
-  localStorage.setItem(CURRENT_KEY, url);
+  try {
+    localStorage.setItem(CURRENT_KEY, url);
+  } catch {
+    // storage full; losing the resume position is harmless
+  }
 }
 
 export function getSettings(): ReaderSettings {
@@ -212,8 +284,14 @@ export function getScrollPosition(url: string): number {
 
 export function saveScrollPosition(url: string, position: number) {
   try {
-    const positions = JSON.parse(localStorage.getItem(SCROLL_KEY) || "{}");
+    const positions: Record<string, number> = JSON.parse(localStorage.getItem(SCROLL_KEY) || "{}");
+    // Re-insert so the most recently read chapters stay at the end, then drop the oldest
+    delete positions[url];
     positions[url] = position;
+    const urls = Object.keys(positions);
+    for (const old of urls.slice(0, Math.max(0, urls.length - MAX_SCROLL_POSITIONS))) {
+      delete positions[old];
+    }
     localStorage.setItem(SCROLL_KEY, JSON.stringify(positions));
   } catch {
     // ignore
@@ -245,4 +323,28 @@ export function getKnownChapters(url: string, excludeUrl?: string): Record<strin
       .filter((c) => c.novelSlug === novelSlug && c.url !== excludeUrl)
       .map((c) => [c.url, c.nextUrl])
   );
+}
+
+// The chapter the latest background job started from. On the next app open the
+// same window is requested once more, so chapters lost to a broken job chain
+// (e.g. a failed handoff between serverless invocations) still get translated.
+export function setPendingWindow(url: string) {
+  try {
+    localStorage.setItem(PENDING_WINDOW_KEY, JSON.stringify({ url, at: Date.now() }));
+  } catch {
+    // storage full; only the recovery is lost
+  }
+}
+
+export function getPendingWindow(): string | null {
+  try {
+    const pending = JSON.parse(localStorage.getItem(PENDING_WINDOW_KEY) || "null");
+    return pending && Date.now() - pending.at < PENDING_WINDOW_MAX_AGE_MS ? pending.url : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingWindow() {
+  localStorage.removeItem(PENDING_WINDOW_KEY);
 }

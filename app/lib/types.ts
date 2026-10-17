@@ -29,6 +29,7 @@ export const AI_MODEL_OPTIONS: AIModelOption[] = [
       "gpt-5.4-nano",
       "gpt-5.6-luna",
       "gpt-5.6-sol",
+      "gpt-6.1-sol",
     ],
   },
 ];
@@ -62,8 +63,16 @@ export function getProviderForModel(model: string): AIProvider {
   return "openai";
 }
 
-export function isChatGPTModel(model: string): boolean {
-  return getProviderForModel(model) === "openai" && model.startsWith("gpt-5");
+// OpenAI reasoning models (GPT-5 and later, o-series). They go through the
+// Responses API, support reasoning effort and web search, and reject any
+// temperature other than the default.
+export function isOpenAIReasoningModel(model: string): boolean {
+  if (getProviderForModel(model) !== "openai") return false;
+  // Fine-tuned models ("ft:gpt-5…:org::id") behave like their base model
+  const base = model.replace(/^ft:/, "");
+  const gpt = base.match(/^gpt-(\d+)/);
+  if (gpt) return parseInt(gpt[1], 10) >= 5;
+  return /^o\d/.test(base);
 }
 
 export function getApiKeyForModel(settings: ReaderSettings): string {
@@ -111,7 +120,8 @@ export interface TranslateOptions {
   webSearch?: boolean;
 }
 
-export type ChapterJobStatus = "fetching" | "translating" | "done" | "error";
+// "saved": the device already saved it; only a receipt (with nextUrl) is kept
+export type ChapterJobStatus = "fetching" | "translating" | "done" | "error" | "saved";
 
 // A chapter being (or already) translated by a server-side background job
 export interface ChapterJob extends TranslatedChapter {
@@ -130,6 +140,6 @@ export function getTranslateOptions(settings: ReaderSettings): TranslateOptions 
     customPrompt: settings.customPrompt,
     referenceLinks: settings.referenceLinks,
     reasoningEffort: settings.reasoningEffort,
-    webSearch: isChatGPTModel(settings.aiModel) ? settings.webSearch : false,
+    webSearch: isOpenAIReasoningModel(settings.aiModel) ? settings.webSearch : false,
   };
 }

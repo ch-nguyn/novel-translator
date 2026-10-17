@@ -1,7 +1,8 @@
 import { TranslatedChapter, TranslateOptions, ZH_TITLE_PROMPT } from "./types";
+import { parseTranslationStream, STREAM_NONCE_HEADER } from "./stream";
 
 // Pricing per million tokens: [input, output] in USD
-// Models not listed here are considered free
+// Models not listed here have unknown pricing
 const MODEL_PRICING: Record<string, [number, number]> = {
   "gpt-5.4": [2.00, 8.00],
   "gpt-5.4-mini": [0.40, 1.60],
@@ -22,6 +23,15 @@ function calculateCost(model: string, inputTokens: number, outputTokens: number)
   if (!pricing) return null;
   const cost = (inputTokens * pricing[0] + outputTokens * pricing[1]) / 1_000_000;
   return `$${cost.toFixed(4)}`;
+}
+
+// Error message from a failed API response. Falls back to the status when the
+// body is not JSON (e.g. a platform timeout page).
+export async function readErrorMessage(res: Response, fallback: string): Promise<string> {
+  const err = await res.json().catch(() => null);
+  if (err?.error) return err.error;
+  if (res.status === 504) return `${fallback}: the server took too long to respond. Please try again.`;
+  return `${fallback} (HTTP ${res.status})`;
 }
 
 export interface FetchContentResult {
@@ -46,8 +56,7 @@ export async function fetchChapterContent(
   });
 
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || "Failed to fetch content");
+    throw new Error(await readErrorMessage(res, "Failed to fetch content"));
   }
 
   const data = await res.json();
@@ -130,39 +139,40 @@ export async function simplifyText(
   });
 
   if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || "Failed to simplify");
+    throw new Error(await readErrorMessage(res, "Failed to translate"));
   }
 
+  const nonce = res.headers.get(STREAM_NONCE_HEADER) ?? "";
   const reader = res.body?.getReader();
   const decoder = new TextDecoder();
-  let result = "";
+  let raw = "";
 
   if (reader) {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      result += decoder.decode(value, { stream: true });
-      onChunk?.(result);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        raw += decoder.decode(value, { stream: true });
+        onChunk?.(parseTranslationStream(raw, nonce).text);
+      }
+    } catch (e) {
+      if (e instanceof Error && e.name === "AbortError") throw e;
+      // The connection dropped: fine if the terminal record already arrived,
+      // otherwise parsing below reports the chapter as unfinished
     }
   }
 
-  // Extract and log token usage
-  const usageMatch = result.match(/\n<!--USAGE:(\{.*?\})-->/);
-  if (usageMatch) {
-    result = result.replace(usageMatch[0], "");
-    try {
-      const usage = JSON.parse(usageMatch[1]);
-      const cost = calculateCost(model, usage.input, usage.output);
-      const costStr = cost ? ` | Cost: ${cost}` : " | [Free]";
-      console.log(
-        `[Token Usage] Input: ${usage.input}, Output: ${usage.output}, Total: ${usage.input + usage.output}${costStr}`
-      );
-    } catch {
-      // ignore
-    }
-    onChunk?.(result);
+  const { text: result, usage, error } = parseTranslationStream(raw, nonce);
+  onChunk?.(result);
+
+  if (usage) {
+    const cost = calculateCost(model, usage.input, usage.output);
+    const costStr = cost ? ` | Cost: ${cost}` : " | [Unknown price]";
+    console.log(
+      `[Token Usage] Input: ${usage.input}, Output: ${usage.output}, Total: ${usage.input + usage.output}${costStr}`
+    );
   }
+  if (error) throw new Error(error);
 
   return result;
 }

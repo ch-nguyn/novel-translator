@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { DEFAULT_AI_MODEL, SavedChapter, ReaderSettings, TranslatedChapter, getTextColor, getApiKeyForModel, getTranslateOptions } from "./lib/types";
+import { useState, useRef, useCallback, useEffect } from "react";
+import { DEFAULT_AI_MODEL, SavedChapter, ReaderSettings, TranslatedChapter, TranslateOptions, getTextColor, getApiKeyForModel, getTranslateOptions } from "./lib/types";
 import {
   getSavedChapters,
   saveChapter,
@@ -14,14 +14,24 @@ import {
   getScrollPosition,
   saveScrollPosition,
   getKnownChapters,
+  getClearedNovels,
+  reviveNovel,
+  withStorageLock,
+  StorageFullError,
+  getPendingWindow,
+  clearPendingWindow,
 } from "./lib/storage";
 import { ChapterMeta, fetchChapterContent, translateChapterDirect } from "./lib/api";
 import {
   acknowledgeJobChapters,
-  hasJobChapter,
+  backgroundJobsMaybeAvailable,
+  discardNovelJobs,
+  getJobChapterStatus,
+  getLastJobStartAt,
   saveTranslatedChapter,
   startBackgroundJob,
   syncFinishedJobs,
+  SyncResult,
   watchJobChapter,
 } from "./lib/jobs";
 import SettingsPanel from "./components/SettingsPanel";
@@ -33,6 +43,14 @@ import ContactPanel from "./components/ContactPanel";
 import { getTranslations } from "./lib/i18n";
 
 type Panel = "none" | "chapters" | "novels" | "settings" | "ai-settings" | "contact";
+
+// Message shown above the chapter text
+type Notice =
+  | { kind: "error"; message: string }
+  // Old chapters were removed because browser storage was full
+  | { kind: "evicted"; count: number }
+  // A chapter could not be saved even after removing old ones
+  | { kind: "storageFull" };
 
 export default function Home() {
   const [url, setUrl] = useState("");
@@ -64,6 +82,7 @@ export default function Home() {
   });
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [autoTranslating, setAutoTranslating] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const autoModeRef = useRef(false);
   const t = getTranslations(settings.appLang);
@@ -99,22 +118,54 @@ export default function Home() {
       }
     }
 
+    const mountedAt = Date.now();
+
     // Pull in chapters translated in the background while the app was closed
-    syncFinishedJobs().then(async (count) => {
-      if (count) setSavedChapters(getSavedChapters());
-      if (!currentUrl) return;
-      const chapter = getSavedChapters().find((c) => c.url === currentUrl);
-      if (chapter) {
-        // It finished while the app was closed
-        if (!shownAtStart) loadSavedChapter(chapter);
-      } else if (await hasJobChapter(currentUrl)) {
-        resumeJobChapter(currentUrl);
+    syncFinishedJobs().then(async (result) => {
+      const isCleared = (u: string) => getClearedNovels().has(extractNovelSlug(u));
+      // The user may have deleted the novel or opened another chapter meanwhile
+      const stillCurrent = !!currentUrl && getCurrentUrl() === currentUrl && !isCleared(currentUrl);
+      let resumed = false;
+      if (currentUrl && stillCurrent) {
+        const chapter = getSavedChapters().find((c) => c.url === currentUrl);
+        if (chapter) {
+          // It finished while the app was closed
+          if (!shownAtStart) loadSavedChapter(chapter);
+        } else {
+          const status = await getJobChapterStatus(currentUrl);
+          const options = getTranslateOptions(getSettings());
+          if (getCurrentUrl() !== currentUrl || isCleared(currentUrl)) {
+            // changed while checking; leave it
+          } else if (status === "active" || status === "error") {
+            resumed = true;
+            resumeJobChapter(currentUrl);
+          } else if ((status === "abandoned" || status === "none") && options.apiKey.trim()) {
+            // The job died, or never reached the server: start it again
+            resumed = true;
+            runChapter(currentUrl, produceChapter(currentUrl, options));
+          }
+        }
       }
+
+      // Ask once more for the last translate-ahead window, in case its job chain
+      // broke. Not while a chapter is being resumed (its job is still running),
+      // and not if the user has started newer work since the app opened.
+      const pendingWindow = getPendingWindow();
+      if (!resumed && pendingWindow && !isCleared(pendingWindow) && getLastJobStartAt() < mountedAt) {
+        const options = getTranslateOptions(getSettings());
+        if (options.apiKey.trim()) {
+          clearPendingWindow();
+          startBackgroundJob(pendingWindow, options, getKnownChapters(pendingWindow), { remember: false }).catch(() => {});
+        }
+      }
+
+      // After loading the chapter, which clears notices
+      applySyncResult(result);
     });
 
     const handleVisible = () => {
       if (document.visibilityState === "visible") {
-        syncFinishedJobs().then((count) => count && setSavedChapters(getSavedChapters()));
+        syncFinishedJobs().then(applySyncResult);
       }
     };
     document.addEventListener("visibilitychange", handleVisible);
@@ -147,6 +198,10 @@ export default function Home() {
     };
   }, [url]);
 
+  useEffect(() => {
+    document.documentElement.lang = settings.appLang;
+  }, [settings.appLang]);
+
   function togglePanel(panel: Panel) {
     setActivePanel((prev) => (prev === panel ? "none" : panel));
   }
@@ -161,20 +216,46 @@ export default function Home() {
     setSavedChapters(getSavedChapters());
   }
 
+  function applySyncResult({ saved, evicted }: SyncResult) {
+    if (saved) refreshSaved();
+    if (evicted) setNotice({ kind: "evicted", count: evicted });
+  }
+
+  type ChapterProducer = (
+    signal: AbortSignal,
+    onMeta: (meta: ChapterMeta) => void,
+    onText: (text: string) => void
+  ) => Promise<{ chapter: TranslatedChapter; fromJob: boolean }>;
+
+  // Translates a chapter on the server so it keeps going (with the next
+  // chapters) if the app is closed; in this tab when background jobs are unavailable
+  function produceChapter(fetchUrl: string, options: TranslateOptions): ChapterProducer {
+    return async (signal, onMeta, onText) => {
+      const start = () =>
+        startBackgroundJob(fetchUrl, options, getKnownChapters(fetchUrl, fetchUrl), { signal, force: true });
+      // Before the request, so reopening the app finds this chapter even if it is closed right away
+      if (backgroundJobsMaybeAvailable()) setCurrentUrl(fetchUrl);
+      const jobId = await start();
+      if (jobId) {
+        return { chapter: await watchJobChapter(fetchUrl, jobId, signal, onMeta, onText, start), fromJob: true };
+      }
+      return { chapter: await translateChapterDirect(fetchUrl, options, signal, onMeta, onText), fromJob: false };
+    };
+  }
+
   // Shows a chapter while `produce` fetches/translates it, then saves it locally
   async function runChapter(
     fetchUrl: string,
-    produce: (
-      signal: AbortSignal,
-      onMeta: (meta: ChapterMeta) => void,
-      onText: (text: string) => void
-    ) => Promise<{ chapter: TranslatedChapter; fromJob: boolean }>
+    produce: ChapterProducer
   ): Promise<{ nextUrl: string | null } | null> {
     abortRef.current?.abort();
+    // Opening a chapter means the user is reading this novel (again)
+    reviveNovel(extractNovelSlug(fetchUrl));
     const controller = new AbortController();
     abortRef.current = controller;
 
     setFetching(true);
+    setNotice(null);
     setSimplifiedText("");
     setTitle("");
     setNovelName("");
@@ -196,8 +277,15 @@ export default function Home() {
 
     try {
       const { chapter, fromJob } = await produce(controller.signal, onMeta, setSimplifiedText);
-      const savedTitle = saveTranslatedChapter(fetchUrl, chapter);
+      const saved = await withStorageLock(() =>
+        // The novel may have been deleted while this chapter was translating
+        getClearedNovels().has(extractNovelSlug(fetchUrl)) ? null : saveTranslatedChapter(fetchUrl, chapter)
+      );
       if (fromJob) await acknowledgeJobChapters([fetchUrl]);
+      // Deleted while translating, or the user opened another chapter meanwhile
+      if (!saved || controller.signal.aborted) return null;
+      const { title: savedTitle, evicted } = saved;
+      if (evicted) setNotice({ kind: "evicted", count: evicted });
 
       setSimplifiedText(chapter.text);
       setNovelName(chapter.novelName);
@@ -209,8 +297,11 @@ export default function Home() {
       setCurrentUrl(fetchUrl);
       return { nextUrl: chapter.nextUrl };
     } catch (e: unknown) {
-      if (e instanceof Error && e.name !== "AbortError") {
-        setSimplifiedText(`Error: ${e.message}`);
+      // Keep whatever was translated so far on screen; it is just not saved
+      if (e instanceof StorageFullError) {
+        setNotice({ kind: "storageFull" });
+      } else if (e instanceof Error && e.name !== "AbortError") {
+        setNotice({ kind: "error", message: e.message });
       }
       return null;
     } finally {
@@ -227,45 +318,49 @@ export default function Home() {
       const fetchUrl = targetUrl || url;
       if (!fetchUrl.trim() || fetching || simplifying) return null;
 
-      const options = getTranslateOptions(settings);
-      return runChapter(fetchUrl, async (signal, onMeta, onText) => {
-        // Translate on the server so it keeps going (with the next chapters) if the app is closed
-        const jobId = await startBackgroundJob(fetchUrl, options, getKnownChapters(fetchUrl, fetchUrl), signal);
-        if (jobId) {
-          setCurrentUrl(fetchUrl);
-          return { chapter: await watchJobChapter(fetchUrl, jobId, signal, onMeta, onText), fromJob: true };
-        }
-        return { chapter: await translateChapterDirect(fetchUrl, options, signal, onMeta, onText), fromJob: false };
-      });
+      return runChapter(fetchUrl, produceChapter(fetchUrl, getTranslateOptions(settings)));
     },
     [url, fetching, simplifying, settings]
   );
 
-  // Shows a chapter that a background job is still translating
+  // Shows a chapter that a background job is still translating (restarting
+  // the job if its worker died). Reads settings from storage: this also runs
+  // from the mount effect, before the settings state is loaded.
   function resumeJobChapter(chapterUrl: string) {
+    const options = getTranslateOptions(getSettings());
+    const restart = () =>
+      options.apiKey.trim()
+        ? startBackgroundJob(chapterUrl, options, getKnownChapters(chapterUrl, chapterUrl), { force: true })
+        : Promise.resolve(null);
     return runChapter(chapterUrl, async (signal, onMeta, onText) => ({
-      chapter: await watchJobChapter(chapterUrl, null, signal, onMeta, onText),
+      chapter: await watchJobChapter(chapterUrl, null, signal, onMeta, onText, restart),
       fromJob: true,
     }));
   }
 
   async function navigateToChapter(targetUrl: string) {
     window.scrollTo(0, 0);
-    if (await syncFinishedJobs()) refreshSaved();
+    // Do not wait for the sync: if the app is closed right after Next, the job must already be on its way
+    const sync = syncFinishedJobs();
     const saved = getSavedChapters().find((c) => c.url === targetUrl);
+    let opening: Promise<unknown>;
     if (saved) {
-      await loadSavedChapter(saved);
+      opening = loadSavedChapter(saved);
       // Keep the following chapters translating ahead in the background
       const options = getTranslateOptions(settings);
       if (options.apiKey.trim()) {
         startBackgroundJob(targetUrl, options, getKnownChapters(targetUrl)).catch(() => {});
       }
     } else {
-      await handleFetchAndSimplify(targetUrl);
+      opening = handleFetchAndSimplify(targetUrl);
     }
+    // Applied after the chapter started loading (which clears notices) so an eviction notice stays visible
+    sync.then(applySyncResult);
+    await opening;
   }
 
   async function loadSavedChapter(chapter: SavedChapter) {
+    setNotice(null);
     setUrl(chapter.url);
     setTitle(chapter.title);
     setNovelName(chapter.novelName || "");
@@ -284,10 +379,19 @@ export default function Home() {
     if (!chapter.prevUrl && !chapter.nextUrl) {
       try {
         const data = await fetchChapterContent(chapter.url);
-        setPrevUrl(data.prevUrl);
-        setNextUrl(data.nextUrl);
-        saveChapter({ ...chapter, prevUrl: data.prevUrl, nextUrl: data.nextUrl });
+        // Only if the chapter still exists (it may have been deleted meanwhile)
+        const updated = await withStorageLock(() => {
+          const current = getSavedChapters().find((c) => c.url === chapter.url);
+          if (!current) return false;
+          saveChapter({ ...current, prevUrl: data.prevUrl, nextUrl: data.nextUrl });
+          return true;
+        });
+        if (!updated) return;
         refreshSaved();
+        if (getCurrentUrl() === chapter.url) {
+          setPrevUrl(data.prevUrl);
+          setNextUrl(data.nextUrl);
+        }
       } catch {
         // Ignore
       }
@@ -329,10 +433,18 @@ export default function Home() {
     loadSavedChapter(latest);
   }
 
-  function handleClearNovel(novelSlug: string) {
-    clearNovelChapters(novelSlug);
+  async function handleClearNovel(novelSlug: string) {
+    const name = savedChapters.find((c) => c.novelSlug === novelSlug && c.novelName)?.novelName || novelSlug;
+    if (!window.confirm(t.confirmClearNovel.replace("{name}", name))) return;
+
+    await withStorageLock(() => clearNovelChapters(novelSlug));
+    discardNovelJobs(novelSlug);
     refreshSaved();
     if (url && extractNovelSlug(url) === novelSlug) {
+      // Stop translating it (and auto mode), so it is not saved back
+      autoModeRef.current = false;
+      setAutoTranslating(false);
+      abortRef.current?.abort();
       setSimplifiedText("");
       setTitle("");
       setUrl("");
@@ -342,6 +454,10 @@ export default function Home() {
   }
 
   const isLoading = fetching || simplifying;
+  const hasApiKey = !!getApiKeyForModel(settings)?.trim();
+  // Saved chapters open without an API key; new ones need one to be translated
+  const canNavigate = (target: string) =>
+    !isLoading && (hasApiKey || savedChapters.some((c) => c.url === target));
   const buttonLabel = fetching
     ? t.fetching
     : simplifying
@@ -565,7 +681,34 @@ export default function Home() {
             </div>
           )}
 
-          <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} disabled={isLoading || !getApiKeyForModel(settings)?.trim()} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={navigateToChapter} />
+          {notice && (
+            <div
+              role={notice.kind === "error" ? "alert" : "status"}
+              className="flex items-start gap-3 mb-2 px-3 py-2 rounded-lg border text-sm"
+              style={
+                notice.kind === "error"
+                  ? { borderColor: "#dc262680", backgroundColor: "#dc262614" }
+                  : { borderColor: textColor + "30", backgroundColor: textColor + "0d" }
+              }
+            >
+              <span className="flex-1 whitespace-pre-wrap">
+                {notice.kind === "error"
+                  ? notice.message
+                  : notice.kind === "storageFull"
+                    ? t.storageFull
+                    : t.storageEvicted.replace("{n}", String(notice.count))}
+              </span>
+              <button
+                onClick={() => setNotice(null)}
+                className="shrink-0 opacity-60 hover:opacity-100 cursor-pointer"
+                aria-label={t.dismiss}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
+          <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} canNavigate={canNavigate} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={navigateToChapter} />
 
           <div
             className="min-h-[60vh] px-1 sm:px-2 py-4 whitespace-pre-wrap"
@@ -576,7 +719,7 @@ export default function Home() {
             )}
           </div>
 
-          <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} disabled={isLoading || !getApiKeyForModel(settings)?.trim()} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={navigateToChapter} />
+          <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} canNavigate={canNavigate} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={navigateToChapter} />
         </div>
       </div>
 
