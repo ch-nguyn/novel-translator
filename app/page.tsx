@@ -21,7 +21,8 @@ import {
   getPendingWindow,
   clearPendingWindow,
 } from "./lib/storage";
-import { ChapterMeta, fetchChapterContent, translateChapterDirect } from "./lib/api";
+import { ChapterMeta, fetchChapterContent, fetchFirstChapterUrl, translateChapterDirect } from "./lib/api";
+import { bookPageUrl, normalizeEnteredUrl } from "./lib/sites";
 import {
   acknowledgeJobChapters,
   backgroundJobsMaybeAvailable,
@@ -313,10 +314,31 @@ export default function Home() {
     }
   }
 
+  // The link the user typed, as a chapter URL: a missing https:// is added and
+  // a novel's page becomes its first chapter. Null (error shown) if that fails.
+  async function resolveEnteredUrl(entered: string): Promise<string | null> {
+    const normalized = normalizeEnteredUrl(entered);
+    if (!bookPageUrl(normalized)) return normalized;
+    setFetching(true);
+    setNotice(null);
+    try {
+      const chapterUrl = await fetchFirstChapterUrl(normalized);
+      setUrl(chapterUrl);
+      return chapterUrl;
+    } catch (e: unknown) {
+      setNotice({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      return null;
+    } finally {
+      setFetching(false);
+    }
+  }
+
   const handleFetchAndSimplify = useCallback(
     async (targetUrl?: string): Promise<{ nextUrl: string | null } | null> => {
-      const fetchUrl = targetUrl || url;
-      if (!fetchUrl.trim() || fetching || simplifying) return null;
+      if (!(targetUrl || url).trim() || fetching || simplifying) return null;
+      // Links from navigation are chapter URLs already; a typed one may need resolving
+      const fetchUrl = targetUrl || (await resolveEnteredUrl(url));
+      if (!fetchUrl) return null;
 
       return runChapter(fetchUrl, produceChapter(fetchUrl, getTranslateOptions(settings)));
     },
@@ -411,7 +433,7 @@ export default function Home() {
     setAutoTranslating(true);
     setActivePanel("none");
 
-    let urlToProcess: string | null = url;
+    let urlToProcess: string | null = await resolveEnteredUrl(url);
     const visited = new Set<string>();
 
     while (autoModeRef.current && urlToProcess && !visited.has(urlToProcess)) {

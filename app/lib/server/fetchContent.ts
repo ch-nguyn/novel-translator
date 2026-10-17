@@ -1,5 +1,6 @@
 import * as cheerio from "cheerio";
 import { lookup } from "dns/promises";
+import { bookPageUrl, findSite, isChapterUrl } from "../sites";
 
 interface SiteConfig {
   content: string;
@@ -7,25 +8,16 @@ interface SiteConfig {
   chapterNameSelector?: string;
   // Custom title parser when underscore-split heuristic does not fit (e.g. biquuge h1: "chapter-《novel》")
   extractTitles?: (fullTitle: string, h1: string) => { chapterName: string; novelName: string };
+  // Links to the first chapter on the book's page, tried in order
+  firstChapter: string[];
+  // Non-story elements inside `content` (scripts and the like are always removed)
+  removeSelectors?: string;
+  // Non-story lines in the chapter text
+  junkLine?: RegExp;
 }
 
+// Keyed by NovelSite.domain (see ../sites)
 const SITE_SELECTORS: Record<string, SiteConfig> = {
-  "quanben.io": {
-    content: "#content",
-    lang: "zh",
-  },
-  "www.22biqu.com": {
-    content: "#content",
-    lang: "zh",
-  },
-  "m.22biqu.com": {
-    content: "#chaptercontent",
-    lang: "zh",
-  },
-  "shuhaige.net": {
-    content: "#content",
-    lang: "zh",
-  },
   "biquuge.com": {
     content: "article",
     lang: "zh",
@@ -34,6 +26,10 @@ const SITE_SELECTORS: Record<string, SiteConfig> = {
       if (m) return { chapterName: m[1].trim(), novelName: m[2].trim() };
       return { chapterName: h1, novelName: "" };
     },
+    // The full chapter list; the list above it holds the latest chapters
+    firstChapter: [".book_list2 li a"],
+    // Each sub-page starts and ends with its page number: 第(1/3)页
+    junkLine: /^第\(\d+\/\d+\)页$/,
   },
   "ixdzs.tw": {
     content: "article.page-content",
@@ -46,36 +42,16 @@ const SITE_SELECTORS: Record<string, SiteConfig> = {
       const novelName = parts[1]?.split("-")[0]?.trim() || "";
       return { chapterName, novelName };
     },
+    // The "read now" button, then the full chapter list (".cfirst" holds the latest chapters)
+    firstChapter: ["#readbtn a", ".u-chapter:not(.cfirst) li a"],
+    // The chapter title (repeated from the page header) and ad slots
+    removeSelectors: "h3, .abg",
   },
 };
 
-function rewriteUrl(url: string): string {
-  if (url.includes("69shuba.tw")) {
-    throw new Error(
-      "69shuba.tw is blocked by CAPTCHA. Use 69shuba.com instead (same novels, e.g. https://www.69shuba.com/book/NOVEL_ID.htm)"
-    );
-  }
-  return url;
-}
-
-function getHostname(url: string): string | null {
-  try {
-    const parsed = new URL(url);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.hostname : null;
-  } catch {
-    return null;
-  }
-}
-
-// Matches on the URL's real hostname (exact domain or a subdomain of it), so
-// arbitrary URLs that merely contain a supported domain are rejected
-function getSiteConfig(url: string) {
-  const hostname = getHostname(url);
-  if (!hostname) return null;
-  for (const [domain, config] of Object.entries(SITE_SELECTORS)) {
-    if (hostname === domain || hostname.endsWith("." + domain)) return config;
-  }
-  return null;
+function getSiteConfig(url: string): SiteConfig | null {
+  const site = findSite(url);
+  return site ? SITE_SELECTORS[site.domain] : null;
 }
 
 interface NavResult {
@@ -101,21 +77,12 @@ function extractNav($: cheerio.CheerioAPI, currentUrl: string): NavResult {
     const href = $(el).attr("href");
     if (!isRealUrl(href)) return;
     // Chapter-level navigation
-    if (!nav.prevChapter && (text === "Chương trước" || text === "上一章")) nav.prevChapter = href;
-    if (!nav.nextChapter && (text === "Tiếp theo" || text === "Chương sau" || text === "Chương tiếp" || text === "下一章")) nav.nextChapter = href;
+    if (!nav.prevChapter && text === "上一章") nav.prevChapter = href;
+    if (!nav.nextChapter && text === "下一章") nav.nextChapter = href;
     // Sub-page navigation (within same chapter)
     if (!nav.nextPage && text === "下一页") nav.nextPage = href;
     if (!nav.prevPage && text === "上一页") nav.prevPage = href;
   });
-
-  if (!nav.prevChapter) {
-    const h = $("a.truoc").attr("href");
-    if (isRealUrl(h)) nav.prevChapter = h;
-  }
-  if (!nav.nextChapter) {
-    const h = $("a.sau").attr("href");
-    if (isRealUrl(h)) nav.nextChapter = h;
-  }
 
   // ixdzs.tw: explicit classes
   if (!nav.prevChapter) {
@@ -169,8 +136,11 @@ function parseHtml(html: string, siteConfig: SiteConfig, baseUrl: string) {
     return null;
   }
 
-  // Preserve paragraph breaks: turn <br> into newlines before extracting text
+  contentEl.find("script, style, noscript, iframe, ins").remove();
+  if (siteConfig.removeSelectors) contentEl.find(siteConfig.removeSelectors).remove();
+  // Preserve paragraph breaks: turn <br> and <p> into newlines before extracting text
   contentEl.find("br").replaceWith("\n");
+  contentEl.find("p").after("\n\n");
 
   const text = contentEl.text();
   const { fullTitle, h1 } = extractTitles($);
@@ -196,12 +166,19 @@ function parseHtml(html: string, siteConfig: SiteConfig, baseUrl: string) {
     if (!customNovelName && parsed.novelName) customNovelName = parsed.novelName;
   }
 
+  // On the first and last chapters the sites point "previous/next chapter"
+  // at the book's page or an "end of book" page
+  const chapterLink = (u: string | null) => {
+    const href = abs(u);
+    return href && isChapterUrl(href) ? href : null;
+  };
+
   return {
     text,
     fullTitle,
     h1,
-    prevUrl: abs(nav.prevChapter),
-    nextUrl: abs(nav.nextChapter),
+    prevUrl: chapterLink(nav.prevChapter),
+    nextUrl: chapterLink(nav.nextChapter),
     nextPageUrl: abs(nav.nextPage),
     customNovelName,
     customChapterName,
@@ -400,15 +377,13 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
     throw new FetchContentError(`Unsupported site. Supported: ${supported}`, 400);
   }
 
-  const fetchUrl = rewriteUrl(url);
-
   // 1. Use provided HTML if available
   // 2. Try simple fetch
   // 3. Fallback to Puppeteer for Cloudflare-protected sites
-  let page = providedHtml ? { html: providedHtml, url: fetchUrl } : await fetchWithCheerio(fetchUrl);
+  let page = providedHtml ? { html: providedHtml, url } : await fetchWithCheerio(url);
 
   if (!page) {
-    page = await fetchWithPuppeteer(fetchUrl);
+    page = await fetchWithPuppeteer(url);
   }
 
   // Parse with the selectors of the site the page ended up on after redirects
@@ -418,7 +393,7 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
     throw new FetchContentError("Could not find chapter content on this page", 422);
   }
 
-  // Follow sub-pages (e.g. 22biqu splits chapters into _2.html, _3.html)
+  // Follow sub-pages (e.g. biquuge splits chapters into _2.html, _3.html)
   let fullText = result.text;
   let nextPageUrl = result.nextPageUrl;
   let finalNextUrl = result.nextUrl;
@@ -445,48 +420,18 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
   if (finalNextUrl) result.nextUrl = finalNextUrl;
 
   const cleaned = fullText
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    // Also strips the &nbsp; / full-width space indentation the sites use
+    .map((line) => line.trim())
+    .filter((line) => !siteConfig.junkLine?.test(line))
+    .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  let novelName = result.customNovelName || "";
-  let chapterName = result.customChapterName || "";
-  const titleStr = chapterName || result.fullTitle || result.h1 || "";
-
-  if (siteConfig.lang === "zh" && !chapterName) {
-    // Try splitting title by common separators: "_" or " - "
-    // 22biqu:   "第2章 飞剑_叩问仙道_笔趣阁"  → chapter_novel_site
-    // quanben:  "第1章 山边小村 凡人修仙传 - 全本小说网" → h1 + novel - site
-    const underscoreParts = result.fullTitle.split("_");
-    if (underscoreParts.length >= 3) {
-      // Format: chapterName_novelName_siteName
-      chapterName = underscoreParts[0].trim();
-      novelName = underscoreParts[1].trim();
-    } else {
-      // H1 is the chapter title (quanben style)
-      chapterName = result.h1 || "";
-
-      // Derive novel name: remove h1 and site name from full title
-      if (result.fullTitle && chapterName) {
-        let remaining = result.fullTitle;
-        remaining = remaining.replace(chapterName, "").trim();
-        remaining = remaining.split(" - ")[0].trim();
-        if (remaining) novelName = remaining;
-      }
-
-      // Fallback: if title has " - " pattern like "Novel - Chapter - Site"
-      if (!novelName && !chapterName) {
-        const parts = titleStr.split(" - ");
-        if (parts.length >= 2) {
-          novelName = parts[0].trim();
-          chapterName = parts[1].trim();
-        } else {
-          chapterName = titleStr;
-        }
-      }
-    }
-  }
+  const novelName = result.customNovelName || "";
+  const chapterName = result.customChapterName || result.h1 || result.fullTitle;
+  const titleStr = result.customChapterName || result.fullTitle || result.h1 || "";
 
   return {
     text: cleaned,
@@ -497,4 +442,30 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
     chapterName,
     lang: siteConfig.lang || "vi",
   };
+}
+
+// A chapter URL for `url`: the book's first chapter when `url` is a book's
+// page, otherwise `url` itself (chapters are checked when they are fetched)
+export async function resolveChapterUrl(url: string): Promise<string> {
+  const bookUrl = bookPageUrl(url);
+  if (!bookUrl) return url;
+  const siteConfig = getSiteConfig(bookUrl)!;
+
+  const page = await fetchWithCheerio(bookUrl);
+  if (!page) throw new FetchContentError("Could not load the novel's page. Please try again.", 502);
+
+  const $ = cheerio.load(page.html);
+  for (const selector of siteConfig.firstChapter) {
+    const href = $(selector).first().attr("href");
+    if (!href) continue;
+    try {
+      const chapter = new URL(href, page.url);
+      // Keep https when the site redirected to plain http
+      if (new URL(bookUrl).protocol === "https:") chapter.protocol = "https:";
+      if (isChapterUrl(chapter.href)) return chapter.href;
+    } catch {
+      // not a usable link; try the next selector
+    }
+  }
+  throw new FetchContentError("Could not find the first chapter on the novel's page", 422);
 }

@@ -1,4 +1,5 @@
 import { DEFAULT_AI_MODEL, SavedChapter, ReaderSettings } from "./types";
+import { findSite } from "./sites";
 
 const STORAGE_KEY = "novel-translator-chapters";
 const CURRENT_KEY = "novel-translator-current";
@@ -35,55 +36,13 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   webSearch: false,
 };
 
-// Extract novel slug from URL
-// tvtruyen.com:    /tien-vo-de-ton-dich/chuong-1-xxx  → tien-vo-de-ton-dich
-// tangthuvien.net: /doc-truyen/novel-slug/chuong-1     → novel-slug
-// webnovel.vn:     /novel-slug/chuong-1/               → novel-slug
+// Groups chapters by novel (e.g. biquuge.com/0/229/245181.html → biquuge-229)
 export function extractNovelSlug(url: string): string {
   try {
-    const pathname = new URL(url).pathname.replace(/\/$/, "");
-    const parts = pathname.split("/").filter(Boolean);
-
-    if (url.includes("tangthuvien.net")) {
-      // /doc-truyen/novel-slug/chuong-X
-      const idx = parts.indexOf("doc-truyen");
-      if (idx >= 0 && parts[idx + 1]) return parts[idx + 1];
-    }
-
-    // quanben.io: /n/novel-slug/1.html → novel-slug
-    if (url.includes("quanben.io")) {
-      const nIdx = parts.indexOf("n");
-      if (nIdx >= 0 && parts[nIdx + 1]) return parts[nIdx + 1];
-    }
-
-    // 22biqu.com: /biqu59699/30115507.html → biqu59699
-    if (url.includes("22biqu.com")) {
-      if (parts.length >= 1) return parts[0];
-    }
-
-    // biquuge.com: /{cat}/{bookId}/{chapterId}.html → biquuge-{bookId} (namespaced; bookIds are numeric and could collide)
-    if (url.includes("biquuge.com")) {
-      if (parts.length >= 2) return `biquuge-${parts[1]}`;
-    }
-
-    // ixdzs.tw: /read/{bookId}/p{n}.html → ixdzs-{bookId}
-    if (url.includes("ixdzs.tw")) {
-      const idx = parts.indexOf("read");
-      if (idx >= 0 && parts[idx + 1]) return `ixdzs-${parts[idx + 1]}`;
-    }
-
-    // 69shuba.com: /txt/NOVEL_ID/CHAPTER_ID → NOVEL_ID
-    if (url.includes("69shuba") || url.includes("69shu")) {
-      const txtIdx = parts.indexOf("txt");
-      if (txtIdx >= 0 && parts[txtIdx + 1]) return parts[txtIdx + 1];
-      const bookIdx = parts.indexOf("book");
-      if (bookIdx >= 0 && parts[bookIdx + 1]) return parts[bookIdx + 1].replace(".htm", "");
-    }
-
-    // tvtruyen.com: /novel-slug/chuong-X
-    // webnovel.vn:  /novel-slug/chuong-X
-    if (parts.length >= 2) return parts[0];
-    return parts[0] || "unknown";
+    const { pathname } = new URL(url);
+    const slug = findSite(url)?.novelSlug(pathname);
+    if (slug) return slug;
+    return pathname.split("/").filter(Boolean)[0] || "unknown";
   } catch {
     return "unknown";
   }

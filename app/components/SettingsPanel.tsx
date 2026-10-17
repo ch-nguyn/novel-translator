@@ -2,6 +2,9 @@
 
 import { ReaderSettings, BG_OPTIONS, getApiKeyForModel } from "../lib/types";
 import { Translations } from "../lib/i18n";
+import { NOVEL_SITES } from "../lib/sites";
+
+const EXAMPLE_URL = "https://www.biquuge.com/9/9685/";
 
 interface Props {
   settings: ReaderSettings;
@@ -68,12 +71,12 @@ export default function SettingsPanel({ settings, textColor, t, url, onUrlChange
           <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
             {t.linkHelpText}{" "}
             <a
-              href="https://quanben.io/n/yuanlaiwoshixiuxiandalao/1.html"
+              href={EXAMPLE_URL}
               target="_blank"
               rel="noopener noreferrer"
               className="underline hover:opacity-70"
             >
-              https://quanben.io/n/yuanlaiwoshixiuxiandalao/1.html
+              {EXAMPLE_URL}
             </a>
           </p>
         </div>
@@ -211,12 +214,7 @@ export default function SettingsPanel({ settings, textColor, t, url, onUrlChange
         <div>
           <p className="text-sm font-medium mb-2">{t.supportedSites}</p>
           <div className="flex flex-col gap-2">
-            {[
-              { domain: "biquuge.com", host: "www.biquuge.com", lang: "ZH", sample: "https://www.biquuge.com/0/229/245181.html" },
-              { domain: "quanben.io", host: "www.quanben.io", lang: "ZH", sample: "https://quanben.io/n/yuanlaiwoshixiuxiandalao/1.html" },
-              { domain: "shuhaige.net", host: "www.shuhaige.net", lang: "ZH", sample: "https://www.shuhaige.net/117632/537331.html" },
-              { domain: "ixdzs.tw", host: "ixdzs.tw", lang: "ZH-TW", sample: "https://ixdzs.tw/read/46710/p1.html" },
-            ].map(({ domain, host, lang, sample }) => (
+            {NOVEL_SITES.map(({ domain, homepage, label, sample }) => (
               <div
                 key={domain}
                 className="flex items-center justify-between gap-2 px-3 py-2 rounded border"
@@ -224,7 +222,7 @@ export default function SettingsPanel({ settings, textColor, t, url, onUrlChange
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <a
-                    href={`https://${host}`}
+                    href={homepage}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-sm font-medium underline hover:opacity-70 cursor-pointer truncate"
@@ -236,21 +234,19 @@ export default function SettingsPanel({ settings, textColor, t, url, onUrlChange
                     className="text-[10px] px-1.5 py-0.5 rounded shrink-0 font-mono"
                     style={{ backgroundColor: textColor + "15", color: textColor + "90" }}
                   >
-                    {lang}
+                    {label}
                   </span>
                 </div>
-                {sample && (
-                  <button
-                    onClick={() => {
-                      onUrlChange(sample);
-                      window.scrollTo({ top: 0, behavior: "smooth" });
-                    }}
-                    className="text-xs px-2.5 py-1 rounded border hover:opacity-70 transition shrink-0 cursor-pointer whitespace-nowrap"
-                    style={{ borderColor: textColor + "30", color: textColor }}
-                  >
-                    {t.trySample}
-                  </button>
-                )}
+                <button
+                  onClick={() => {
+                    onUrlChange(sample);
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                  }}
+                  className="text-xs px-2.5 py-1 rounded border hover:opacity-70 transition shrink-0 cursor-pointer whitespace-nowrap"
+                  style={{ borderColor: textColor + "30", color: textColor }}
+                >
+                  {t.trySample}
+                </button>
               </div>
             ))}
           </div>

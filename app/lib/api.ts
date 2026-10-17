@@ -44,6 +44,19 @@ export interface FetchContentResult {
   lang: string;
 }
 
+// The first chapter's URL of the novel whose page `url` is
+export async function fetchFirstChapterUrl(url: string): Promise<string> {
+  const res = await fetch("/api/resolve-chapter", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) {
+    throw new Error(await readErrorMessage(res, "Failed to find the first chapter"));
+  }
+  return (await res.json()).url;
+}
+
 export async function fetchChapterContent(
   url: string,
   signal?: AbortSignal
