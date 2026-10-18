@@ -48,13 +48,16 @@ async function paymentCode(userId: string): Promise<{ code: string; paidUntil: D
   }
 }
 
+// Holder of the account the plan is paid into, shown to the payer
+const ACCOUNT_NAME = "NGUYEN HUU CHIEN";
+
 // Where to transfer to; null (no payments offered) unless SePay can also
 // report the transfers
 function paymentSettings() {
   const account = process.env.SEPAY_BANK_ACCOUNT?.trim();
   const bank = process.env.SEPAY_BANK?.trim();
   if (!account || !bank || !process.env.SEPAY_API_KEY?.trim()) return null;
-  return { account, bank, accountName: process.env.SEPAY_ACCOUNT_NAME?.trim() ?? "" };
+  return { account, bank, accountName: ACCOUNT_NAME };
 }
 
 export async function subscriptionStatus(userId: string): Promise<SubscriptionStatus> {
