@@ -7,7 +7,7 @@ import Switch from "./Switch";
 
 interface Props {
   settings: ReaderSettings;
-  // Translating on the app's key: the model and key below are not used
+  // Translating on the app's key: no model or key to pick
   systemAI?: boolean;
   textColor: string;
   t: Translations;
@@ -73,93 +73,98 @@ export default function AISettingsPanel({ settings, systemAI, textColor, t, onUp
           {t.systemAINote}
         </p>
       )}
-      <div>
-        <label className="text-sm font-medium block mb-2">{t.aiModel}</label>
-        <div
-          ref={modelPickerRef}
-          className="relative"
-          onKeyDown={(e) => {
-            // Close just the list, not the settings drawer around it. React
-            // listens on the document too, so stop the drawer's listener there.
-            if (e.key === "Escape" && modelMenuOpen) {
-              e.nativeEvent.stopImmediatePropagation();
-              setModelMenuOpen(false);
-            }
-          }}
-        >
-          <div className="flex">
-            <input
-              role="combobox"
-              aria-expanded={modelMenuOpen}
-              aria-controls="openai-model-options"
-              value={settings.aiModel}
-              onFocus={() => setModelMenuOpen(true)}
-              onChange={(e) => {
-                const model = e.target.value;
-                onUpdate({ aiModel: model });
-                setModelMenuOpen(true);
-              }}
-              placeholder={t.aiModelPlaceholder}
-              className="w-full px-3 py-2 rounded-l border text-sm"
-              style={inputStyle}
-            />
-            <button
-              type="button"
-              aria-label={t.aiModel}
-              aria-haspopup="listbox"
-              aria-expanded={modelMenuOpen}
-              onClick={() => setModelMenuOpen((open) => !open)}
-              className="px-3 rounded-r border border-l-0 text-sm cursor-pointer hover:opacity-70"
-              style={inputStyle}
-            >
-              ▾
-            </button>
-          </div>
-          {modelMenuOpen && (
+      {/* On the app's AI the model is fixed and no key is needed */}
+      {!systemAI && (
+        <>
+          <div>
+            <label className="text-sm font-medium block mb-2">{t.aiModel}</label>
             <div
-              id="openai-model-options"
-              role="listbox"
-              className="absolute left-0 right-0 z-20 mt-1 rounded border shadow-lg overflow-hidden"
-              style={{
-                backgroundColor: textColor === "#d4d4d4" || textColor === "#cccccc" ? "#1a1a2e" : "#ffffff",
-                borderColor: textColor + "30",
+              ref={modelPickerRef}
+              className="relative"
+              onKeyDown={(e) => {
+                // Close just the list, not the settings drawer around it. React
+                // listens on the document too, so stop the drawer's listener there.
+                if (e.key === "Escape" && modelMenuOpen) {
+                  e.nativeEvent.stopImmediatePropagation();
+                  setModelMenuOpen(false);
+                }
               }}
             >
-              {AI_MODEL_OPTIONS.flatMap((group) => group.models).map((model) => (
+              <div className="flex">
+                <input
+                  role="combobox"
+                  aria-expanded={modelMenuOpen}
+                  aria-controls="openai-model-options"
+                  value={settings.aiModel}
+                  onFocus={() => setModelMenuOpen(true)}
+                  onChange={(e) => {
+                    const model = e.target.value;
+                    onUpdate({ aiModel: model });
+                    setModelMenuOpen(true);
+                  }}
+                  placeholder={t.aiModelPlaceholder}
+                  className="w-full px-3 py-2 rounded-l border text-sm"
+                  style={inputStyle}
+                />
                 <button
-                  key={model}
                   type="button"
-                  role="option"
-                  aria-selected={settings.aiModel === model}
-                  onClick={() => updateModel(model)}
-                  className="block w-full px-3 py-2 text-left text-sm cursor-pointer hover:opacity-70"
+                  aria-label={t.aiModel}
+                  aria-haspopup="listbox"
+                  aria-expanded={modelMenuOpen}
+                  onClick={() => setModelMenuOpen((open) => !open)}
+                  className="px-3 rounded-r border border-l-0 text-sm cursor-pointer hover:opacity-70"
+                  style={inputStyle}
+                >
+                  ▾
+                </button>
+              </div>
+              {modelMenuOpen && (
+                <div
+                  id="openai-model-options"
+                  role="listbox"
+                  className="absolute left-0 right-0 z-20 mt-1 rounded border shadow-lg overflow-hidden"
                   style={{
-                    backgroundColor: settings.aiModel === model ? textColor + "15" : "transparent",
-                    color: textColor,
+                    backgroundColor: textColor === "#d4d4d4" || textColor === "#cccccc" ? "#1a1a2e" : "#ffffff",
+                    borderColor: textColor + "30",
                   }}
                 >
-                  {model}
-                </button>
-              ))}
+                  {AI_MODEL_OPTIONS.flatMap((group) => group.models).map((model) => (
+                    <button
+                      key={model}
+                      type="button"
+                      role="option"
+                      aria-selected={settings.aiModel === model}
+                      onClick={() => updateModel(model)}
+                      className="block w-full px-3 py-2 text-left text-sm cursor-pointer hover:opacity-70"
+                      style={{
+                        backgroundColor: settings.aiModel === model ? textColor + "15" : "transparent",
+                        color: textColor,
+                      }}
+                    >
+                      {model}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      </div>
+          </div>
 
-      <div>
-        <label className="text-sm font-medium block mb-2">{label}</label>
-        <input
-          type="password"
-          value={settings[keyField]}
-          onChange={(e) => onUpdate({ [keyField]: e.target.value })}
-          placeholder={t.apiKeyPlaceholder}
-          className="w-full px-3 py-2 rounded-lg border text-sm"
-          style={inputStyle}
-        />
-        <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
-          {t.apiKeyNote}
-        </p>
-      </div>
+          <div>
+            <label className="text-sm font-medium block mb-2">{label}</label>
+            <input
+              type="password"
+              value={settings[keyField]}
+              onChange={(e) => onUpdate({ [keyField]: e.target.value })}
+              placeholder={t.apiKeyPlaceholder}
+              className="w-full px-3 py-2 rounded-lg border text-sm"
+              style={inputStyle}
+            />
+            <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
+              {t.apiKeyNote}
+            </p>
+          </div>
+        </>
+      )}
 
       <Switch
         label={t.autoGlossary}
@@ -169,7 +174,7 @@ export default function AISettingsPanel({ settings, systemAI, textColor, t, onUp
         note={t.autoGlossaryNote}
       />
 
-      {isChatGPT && <div>
+      {(systemAI || isChatGPT) && <div>
         <label className="text-sm font-medium block mb-2">{t.reasoningEffort}</label>
         <select
           value={settings.reasoningEffort}
