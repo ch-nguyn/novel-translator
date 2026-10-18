@@ -27,8 +27,7 @@ import {
   NovelUpdate,
   MAX_CHAPTERS_PER_NOVEL,
 } from "./lib/storage";
-import { checkNovelUpdates, getCachedToc } from "./lib/toc";
-import { exportNovelEpub, exportNovelTxt, orderNovelChapters } from "./lib/exportNovel";
+import { checkNovelUpdates } from "./lib/toc";
 import { applyNames, editTerm, renameTerm, termKey } from "./lib/glossary";
 import { exportGlossary, importGlossary, scanSavedChapters, SCAN_CHAPTERS, updateGlossary } from "./lib/glossaryActions";
 import { ChapterMeta, fetchChapterContent, fetchFirstChapterUrl, translateChapterDirect } from "./lib/api";
@@ -847,17 +846,6 @@ export default function Home() {
     changeGlossary((terms) => editTerm(terms, termKey(term), term.target, change));
   }
 
-  // Downloads the open novel's saved chapters as an ebook or a text file, in
-  // the site's order when its chapter list was loaded, else following the links
-  function exportCurrentNovel(format: "epub" | "txt") {
-    if (currentNovelChapters.length === 0) return;
-    const name = currentNovelChapters.find((c) => c.novelName)?.novelName || novelName || currentNovelSlug || "";
-    const order = getCachedToc(currentNovelChapters[0].url)?.chapters.map((c) => c.url);
-    const chapters = orderNovelChapters(currentNovelChapters, order);
-    if (format === "epub") exportNovelEpub(name, chapters);
-    else exportNovelTxt(name, chapters);
-  }
-
   function handleTermDelete(term: GlossaryTerm) {
     changeGlossary((terms) => terms.filter((t) => termKey(t) !== termKey(term)));
   }
@@ -1315,34 +1303,19 @@ export default function Home() {
                   />
                 ) : (
                   <>
-                    {currentNovelChapters.length > 0 && (
-                      <div className="flex items-center gap-2 mb-2 text-xs" style={{ color: textColor + "99" }}>
-                        <span>{t.exportNovel}:</span>
-                        {(["epub", "txt"] as const).map((format) => (
-                          <button
-                            key={format}
-                            onClick={() => exportCurrentNovel(format)}
-                            className="px-2 py-1 rounded-md border cursor-pointer hover:opacity-70"
-                            style={{ borderColor: textColor + "30", color: textColor }}
-                          >
-                            {format === "epub" ? t.exportEpub : t.exportTxt}
-                          </button>
-                        ))}
-                      </div>
-                    )}
                     {currentNovelChapters.length >= MAX_CHAPTERS_PER_NOVEL && (
                       <p className="mb-2 text-xs" style={{ color: textColor + "80" }}>
                         {t.chapterCapNote.replace("{n}", String(MAX_CHAPTERS_PER_NOVEL))}
                       </p>
                     )}
-                  <SavedChaptersList
-                    chapters={currentNovelChapters}
-                    settings={settings}
-                    textColor={textColor}
-                    currentUrl={libraryUrl}
-                    t={t}
-                    onLoad={openSavedChapter}
-                  />
+                    <SavedChaptersList
+                      chapters={currentNovelChapters}
+                      settings={settings}
+                      textColor={textColor}
+                      currentUrl={libraryUrl}
+                      t={t}
+                      onLoad={openSavedChapter}
+                    />
                   </>
                 )}
               </>
@@ -1410,19 +1383,7 @@ export default function Home() {
           <TabPanel idPrefix="settings" active={settingsTab}>
             {settingsTab === "ai" && <AISettingsPanel settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "speech" && <SpeechSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
-            {settingsTab === "general" && (
-              <GeneralSettings
-                settings={settings}
-                textColor={textColor}
-                t={t}
-                onUpdate={updateSettings}
-                onRestored={() => {
-                  refreshSaved();
-                  setGlossaryVersion((v) => v + 1);
-                  checkForNewChapters(false);
-                }}
-              />
-            )}
+            {settingsTab === "general" && <GeneralSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "contact" && <ContactPanel textColor={textColor} />}
           </TabPanel>
         </Sheet>

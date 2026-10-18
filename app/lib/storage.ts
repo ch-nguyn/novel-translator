@@ -226,7 +226,7 @@ export function getCurrentUrl(): string | null {
   return localStorage.getItem(CURRENT_KEY);
 }
 
-export function getLastReadMap(): Record<string, string> {
+function getLastReadMap(): Record<string, string> {
   try {
     const map = JSON.parse(localStorage.getItem(LAST_READ_KEY) || "{}");
     return map && typeof map === "object" && !Array.isArray(map) ? map : {};
@@ -297,15 +297,6 @@ function shouldResetModel(model: unknown): boolean {
 
 export function saveSettings(settings: ReaderSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-}
-
-export function getScrollPositions(): Record<string, number> {
-  try {
-    const positions = JSON.parse(localStorage.getItem(SCROLL_KEY) || "{}");
-    return positions && typeof positions === "object" && !Array.isArray(positions) ? positions : {};
-  } catch {
-    return {};
-  }
 }
 
 export function getScrollPosition(url: string): number {
@@ -450,36 +441,6 @@ export function markNovelSeen(novelSlug: string) {
   if (!update || update.seen === update.total) return;
   updates[novelSlug] = { ...update, seen: update.total };
   saveNovelUpdates(updates);
-}
-
-// Novels that have a glossary saved
-export function getGlossaryNovels(): string[] {
-  const slugs: string[] = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key?.startsWith(GLOSSARY_KEY_PREFIX)) slugs.push(key.slice(GLOSSARY_KEY_PREFIX.length));
-  }
-  return slugs;
-}
-
-// Restoring a backup: the merged chapters (newest first) and reading positions
-// are written in one go each. Each novel keeps its most recent chapters, as
-// when saving one. Reading positions the device has already win. Returns the
-// chapters kept; throws StorageFullError (nothing written) when they do not fit.
-export function restoreLibrary(chapters: SavedChapter[], lastRead: Record<string, string>, scroll: Record<string, number>): SavedChapter[] {
-  for (const slug of new Set(chapters.map((c) => c.novelSlug))) chapters = limitNovelChapters(chapters, slug);
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
-  } catch (e) {
-    throw isQuotaError(e) ? new StorageFullError() : e;
-  }
-  try {
-    localStorage.setItem(LAST_READ_KEY, JSON.stringify({ ...lastRead, ...getLastReadMap() }));
-    localStorage.setItem(SCROLL_KEY, JSON.stringify({ ...scroll, ...getScrollPositions() }));
-  } catch {
-    // storage full; only reading positions are lost
-  }
-  return chapters;
 }
 
 // Sets a saved chapter's links to the chapters around it, changing nothing
