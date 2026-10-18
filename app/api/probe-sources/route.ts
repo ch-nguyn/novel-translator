@@ -112,7 +112,7 @@ async function browserProbe({ url, selector }: Probe) {
   const puppeteer = await import("puppeteer-core");
   const chromium = await import("@sparticuz/chromium-min");
   const executablePath = await chromium.default.executablePath(
-    "https://github.com/nichochar/chromium-brotli/releases/download/v143.0.0/chromium-v143.0.0-pack.tar"
+    "https://github.com/Sparticuz/chromium/releases/download/v143.0.4/chromium-v143.0.4-pack.x64.tar"
   );
   const browser = await puppeteer.default.launch({ args: chromium.default.args, executablePath, headless: true });
   try {
