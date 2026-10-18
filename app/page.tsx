@@ -136,7 +136,7 @@ export default function Home() {
   const [savedChapters, setSavedChapters] = useState<SavedChapter[]>([]);
   const [overlay, setOverlay] = useState<Overlay>("none");
   const [libraryTab, setLibraryTab] = useState<LibraryTab>("chapters");
-  const [chapterView, setChapterView] = useState<ChapterView>("toc");
+  const [chapterView, setChapterView] = useState<ChapterView>("saved");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [headerHidden, setHeaderHidden] = useState(false);
   const [settings, setSettings] = useState<ReaderSettings>({
@@ -422,7 +422,11 @@ export default function Home() {
       setOverlay("library");
       return;
     }
-    if (overlay !== "library") setLibraryTab(openUrl || currentNovelChapters.length > 0 ? "chapters" : "novels");
+    if (overlay !== "library") {
+      setLibraryTab(openUrl || currentNovelChapters.length > 0 ? "chapters" : "novels");
+      // The full list is fetched from the site only when asked for
+      setChapterView("saved");
+    }
     toggleOverlay("library");
   }
 
@@ -1273,7 +1277,7 @@ export default function Home() {
               <>
                 {libraryUrl && (
                   <div className="flex gap-1 mb-3 p-1 rounded-lg" style={{ backgroundColor: textColor + "0d" }}>
-                    {(["toc", "saved"] as const).map((view) => (
+                    {(["saved", "toc"] as const).map((view) => (
                       <button
                         key={view}
                         onClick={() => setChapterView(view)}
