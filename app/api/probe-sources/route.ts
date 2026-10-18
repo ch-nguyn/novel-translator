@@ -151,7 +151,7 @@ async function browserProbe({ url, selector }: Probe) {
 export async function GET(request: Request) {
   if (new URL(request.url).searchParams.get("browser") === "1") {
     const results = [];
-    for (const p of BROWSER_PROBES) results.push(await browserProbe(p));
+    for (const p of BROWSER_PROBES) results.push(await browserProbe(p).catch((e) => ({ url: p.url, launchError: e instanceof Error ? `${e.name}: ${e.message}` : String(e) })));
     return Response.json({ region: process.env.VERCEL_REGION ?? null, at: new Date().toISOString(), browser: results });
   }
   const results = await Promise.all(
