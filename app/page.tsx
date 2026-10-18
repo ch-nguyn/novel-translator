@@ -9,6 +9,7 @@ import {
   extractNovelSlug,
   getCurrentUrl,
   setCurrentUrl,
+  getLastReadUrl,
   getSettings,
   saveSettings,
   getScrollPosition,
@@ -190,6 +191,8 @@ export default function Home() {
     if (currentUrl) {
       const chapter = getSavedChapters().find((c) => c.url === currentUrl);
       if (chapter) {
+        // Also records it as its novel's reading position (kept per novel since this was added)
+        setCurrentUrl(chapter.url);
         setUrl(chapter.url);
         setOpenUrl(chapter.url);
         setTitle(chapter.title);
@@ -704,10 +707,14 @@ export default function Home() {
     runChapter(chapterUrl, produceChapter(chapterUrl, getTranslateOptions(settings)));
   }
 
+  // Opens a novel where the reader left off: the chapter last opened in it,
+  // else (never opened on this device since) the most recently saved one
   function handleSelectNovel(slug: string) {
     const novelChapters = savedChapters.filter((c) => c.novelSlug === slug);
-    const latest = novelChapters.reduce((a, b) => (a.savedAt > b.savedAt ? a : b));
-    openSavedChapter(latest);
+    const lastRead = getLastReadUrl(slug);
+    const chapter =
+      novelChapters.find((c) => c.url === lastRead) ?? novelChapters.reduce((a, b) => (a.savedAt > b.savedAt ? a : b));
+    openSavedChapter(chapter);
   }
 
   async function handleClearNovel(novelSlug: string) {

@@ -9,6 +9,10 @@ const SCROLL_KEY = "novel-translator-scroll";
 const DEVICE_KEY = "novel-translator-device-id";
 const CLEARED_NOVELS_KEY = "novel-translator-cleared-novels";
 const PENDING_WINDOW_KEY = "novel-translator-pending-window";
+// The chapter last opened in each novel, by novel slug
+const LAST_READ_KEY = "novel-translator-last-read";
+// Novels whose reading position is kept; the least recently read go first
+const MAX_LAST_READ = 200;
 // One key per novel: `${GLOSSARY_KEY_PREFIX}${novelSlug}`
 const GLOSSARY_KEY_PREFIX = "novel-translator-glossary:";
 const PENDING_WINDOW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
@@ -187,6 +191,8 @@ export function clearNovelChapters(novelSlug: string) {
   cleared.add(novelSlug);
   localStorage.setItem(CLEARED_NOVELS_KEY, JSON.stringify([...cleared]));
   localStorage.removeItem(GLOSSARY_KEY_PREFIX + novelSlug);
+  const { [novelSlug]: _lastRead, ...lastRead } = getLastReadMap();
+  localStorage.setItem(LAST_READ_KEY, JSON.stringify(lastRead));
   // Clear current URL if it belonged to this novel
   const currentUrl = getCurrentUrl();
   if (currentUrl && extractNovelSlug(currentUrl) === novelSlug) {
@@ -216,9 +222,29 @@ export function getCurrentUrl(): string | null {
   return localStorage.getItem(CURRENT_KEY);
 }
 
+function getLastReadMap(): Record<string, string> {
+  try {
+    const map = JSON.parse(localStorage.getItem(LAST_READ_KEY) || "{}");
+    return map && typeof map === "object" && !Array.isArray(map) ? map : {};
+  } catch {
+    return {};
+  }
+}
+
+// The chapter the reader last opened in a novel. Not the most recently saved
+// one: chapters translated ahead are saved after the one being read.
+export function getLastReadUrl(novelSlug: string): string | null {
+  const url = getLastReadMap()[novelSlug];
+  return typeof url === "string" ? url : null;
+}
+
 export function setCurrentUrl(url: string) {
   try {
     localStorage.setItem(CURRENT_KEY, url);
+    // Re-inserted last, so the map stays in reading order for trimming
+    const { [extractNovelSlug(url)]: _previous, ...others } = getLastReadMap();
+    const entries = [...Object.entries(others), [extractNovelSlug(url), url]].slice(-MAX_LAST_READ);
+    localStorage.setItem(LAST_READ_KEY, JSON.stringify(Object.fromEntries(entries)));
   } catch {
     // storage full; losing the resume position is harmless
   }
