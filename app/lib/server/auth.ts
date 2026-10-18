@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { nextCookies } from "better-auth/next-js";
-import { Pool } from "pg";
+import { pool } from "./db";
 
 // Accounts, signed in with Google. Signing in is optional: reading with one's
 // own API key needs no account. Users, sessions and linked Google accounts are
@@ -11,8 +11,7 @@ const productionUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL && `https://${pr
 
 export const auth = betterAuth({
   baseURL: process.env.BETTER_AUTH_URL || productionUrl || undefined,
-  // Neon's URL asks for sslmode=require, which pg already treats as verify-full (and warns about)
-  database: new Pool({ connectionString: process.env.DATABASE_URL?.replace("sslmode=require", "sslmode=verify-full"), max: 3 }),
+  database: pool,
   socialProviders: {
     google: {
       clientId: process.env.GOOGLE_CLIENT_ID!,

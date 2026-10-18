@@ -22,15 +22,22 @@ export default function PrivacyPage() {
 
       <h2>Dữ liệu lưu trên máy của bạn</h2>
       <p>
-        Thư viện truyện, các chương đã dịch, bảng tên riêng, cài đặt và API key bạn nhập đều nằm trong bộ nhớ trình duyệt trên máy của bạn,
+        Thư viện truyện, các chương đã dịch và bảng tên riêng nằm trong bộ nhớ trình duyệt trên máy của bạn,
         không được tải lên máy chủ của ứng dụng. Xóa dữ liệu trang web trong trình duyệt là xóa hết những thứ này.
+      </p>
+
+      <h2>Cài đặt khi đã đăng nhập</h2>
+      <p>
+        Khi bạn đăng nhập, cài đặt của bạn (model AI, prompt, cỡ chữ, màu nền, cách đọc to...) và API key bạn nhập được lưu vào tài khoản
+        để dùng được trên mọi thiết bị. API key được mã hóa trước khi lưu và chỉ được giải mã khi gửi lại cho chính bạn.
+        Khi chưa đăng nhập, những thứ này chỉ nằm trên máy của bạn.
       </p>
 
       <h2>Khi dịch truyện</h2>
       <ul>
         <li>
           Nội dung chương và API key của bạn được gửi qua máy chủ của ứng dụng tới nhà cung cấp AI (OpenAI, Google, Anthropic, OpenRouter tùy model bạn chọn) để dịch.
-          API key chỉ dùng cho lượt dịch đó, không được lưu lại.
+          Máy chủ chỉ dùng API key cho lượt dịch đó.
         </li>
         <li>Khi dịch chạy nền, chương đã dịch được giữ tạm trên máy chủ tối đa 7 ngày cho tới khi máy của bạn tải về.</li>
         <li>Tên truyện và tên chương đã dịch được lưu đệm chung để lần sau dịch nhanh hơn. Phần này không gắn với bạn.</li>

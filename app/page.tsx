@@ -12,6 +12,7 @@ import {
   getLastReadUrl,
   getSettings,
   saveSettings,
+  getSettingsUpdatedAt,
   getScrollPosition,
   saveScrollPosition,
   getKnownChapters,
@@ -65,6 +66,8 @@ import Sheet, { TabPanel, Tabs } from "./components/Sheet";
 import Popover from "./components/Popover";
 import { HeadphonesIcon, ListIcon, PlusIcon, SettingsIcon, TypeIcon } from "./components/Icons";
 import { getTranslations } from "./lib/i18n";
+import { authClient } from "./lib/auth";
+import { pushSettings, syncSettings } from "./lib/settingsSync";
 
 // What is open over the page: the chapter/novel lists, the settings, or a
 // header dropdown (new novel link, display options)
@@ -72,6 +75,8 @@ type Overlay = "none" | "library" | "settings" | "new" | "display";
 type LibraryTab = "chapters" | "names" | "novels";
 // The chapters tab: the ones saved on this device, or every chapter the site lists
 type ChapterView = "saved" | "toc";
+// A settings change is sent to the account this long after the last one
+const SETTINGS_PUSH_DELAY_MS = 1000;
 // Novels whose sites are asked for new chapters, the most recently read first
 const MAX_CHECKED_NOVELS = 20;
 type SettingsTab = "ai" | "speech" | "general" | "account" | "contact";
@@ -173,6 +178,11 @@ export default function Home() {
   const [novelUpdates, setNovelUpdates] = useState<Record<string, NovelUpdate>>({});
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const checkingUpdatesRef = useRef(false);
+  const { data: session } = authClient.useSession();
+  const userId = session?.user.id ?? null;
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
+  const settingsPushRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // The chapter being fetched/translated on screen. Opening another chapter
   // leaves it translating (and saving) in the background, off screen.
   const abortRef = useRef<AbortController | null>(null);
@@ -323,6 +333,30 @@ export default function Home() {
     document.documentElement.lang = settings.appLang;
   }, [settings.appLang]);
 
+  // A signed-in user's settings come from their account, again whenever the
+  // app is brought back (they may have been changed on another device)
+  useEffect(() => {
+    if (!userId) return;
+    const controller = new AbortController();
+    const sync = () => {
+      syncSettings(userId, controller.signal)
+        .then((synced) => synced && setSettings(synced))
+        .catch(() => {});
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") sync();
+      else flushSettings();
+    };
+    sync();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      controller.abort();
+      flushSettings();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId]);
+
   // The header slides away while reading down the chapter and returns on scrolling up
   useEffect(() => {
     let lastY = window.scrollY;
@@ -442,6 +476,18 @@ export default function Home() {
     const updated = { ...settings, ...patch };
     setSettings(updated);
     saveSettings(updated);
+    if (!userIdRef.current) return;
+    // Typing a key or prompt is sent once it pauses
+    clearTimeout(settingsPushRef.current);
+    settingsPushRef.current = setTimeout(flushSettings, SETTINGS_PUSH_DELAY_MS);
+  }
+
+  // Sends a change still waiting to be sent to the account
+  function flushSettings() {
+    if (settingsPushRef.current === undefined) return;
+    clearTimeout(settingsPushRef.current);
+    settingsPushRef.current = undefined;
+    if (userIdRef.current) pushSettings(getSettings(), getSettingsUpdatedAt()).catch(() => {});
   }
 
   function refreshSaved() {

@@ -5,6 +5,9 @@ import { MAX_STORED_TERMS, sanitizeTerms } from "./glossary";
 const STORAGE_KEY = "novel-translator-chapters";
 const CURRENT_KEY = "novel-translator-current";
 const SETTINGS_KEY = "novel-translator-settings";
+// When the settings were last changed, and which account they were last synced with
+const SETTINGS_UPDATED_KEY = "novel-translator-settings-updated";
+const SETTINGS_OWNER_KEY = "novel-translator-settings-owner";
 const SCROLL_KEY = "novel-translator-scroll";
 const DEVICE_KEY = "novel-translator-device-id";
 const CLEARED_NOVELS_KEY = "novel-translator-cleared-novels";
@@ -298,8 +301,30 @@ function shouldResetModel(model: unknown): boolean {
   return REMOVED_MODEL_NAMES.has(model);
 }
 
-export function saveSettings(settings: ReaderSettings) {
+// API keys: encrypted when kept for a signed-in user (app/lib/server/userSettings.ts)
+export const SECRET_SETTINGS = ["openaiApiKey", "geminiApiKey", "claudeApiKey", "openrouterApiKey"] as const;
+// Settings that only make sense on this device (its own voices), never synced
+export const DEVICE_SETTINGS: readonly string[] = ["speechVoice"];
+
+// `updatedAt` is when they were changed; another device's sync passes its own
+export function saveSettings(settings: ReaderSettings, updatedAt = Date.now()) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+  localStorage.setItem(SETTINGS_UPDATED_KEY, String(updatedAt));
+}
+
+// 0 if never saved; settings saved before this was recorded count as the oldest
+export function getSettingsUpdatedAt(): number {
+  const updatedAt = Number(localStorage.getItem(SETTINGS_UPDATED_KEY));
+  if (updatedAt > 0) return updatedAt;
+  return localStorage.getItem(SETTINGS_KEY) ? 1 : 0;
+}
+
+export function getSettingsOwner(): string | null {
+  return localStorage.getItem(SETTINGS_OWNER_KEY);
+}
+
+export function setSettingsOwner(userId: string) {
+  localStorage.setItem(SETTINGS_OWNER_KEY, userId);
 }
 
 export function getScrollPosition(url: string): number {
