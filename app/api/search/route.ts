@@ -1,6 +1,7 @@
 import { hasChinese, MAX_QUERY_CHARS, SearchCandidate, SearchErrorCode } from "../../lib/search";
 import { cacheGuess, guessCandidates, searchNovels } from "../../lib/server/searchNovels";
 import { ModelCallError } from "../../lib/server/llm";
+import { resolveAiAccess } from "../../lib/server/aiAccess";
 
 function fail(code: SearchErrorCode, status: number) {
   return Response.json({ error: code }, { status });
@@ -9,7 +10,7 @@ function fail(code: SearchErrorCode, status: number) {
 // Finds novels on the supported sites by name. A name typed in Vietnamese or
 // pinyin is first turned into Chinese by the AI; a Chinese one (typed, or a
 // guess picked again from an earlier search) is searched as it is. The AI is
-// called with the reader's OpenAI key (see SEARCH_AI_MODEL).
+// called with the app's key or the reader's OpenAI key (see SEARCH_AI_MODEL).
 export async function POST(req: Request) {
   let body: { query?: unknown; candidate?: unknown; apiKey?: unknown } | null;
   try {
@@ -19,7 +20,7 @@ export async function POST(req: Request) {
   }
   if (!body || typeof body !== "object") return fail("invalid", 400);
   const query = typeof body.query === "string" ? body.query.trim() : "";
-  const apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  const apiKey = (await resolveAiAccess(req, body.apiKey, undefined))?.apiKey ?? "";
 
   let candidates: SearchCandidate[];
   // A guess the AI just made, kept for everyone if it finds novels

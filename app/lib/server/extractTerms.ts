@@ -8,7 +8,7 @@ import { complete, getProvider, ModelCallError } from "./llm";
 // Lining up names between a chapter and its translation needs no large
 // model, so OpenAI keys use a small one (falling back to the user's model if
 // the key cannot use it)
-const OPENAI_EXTRACTION_MODEL = "gpt-6-luna";
+const OPENAI_EXTRACTION_MODEL = "gpt-5.6-luna";
 const MAX_NEW_TERMS = 60;
 // Known names listed in the request so the model does not repeat them
 const MAX_KNOWN_LISTED = 300;

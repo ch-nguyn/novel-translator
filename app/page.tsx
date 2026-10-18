@@ -68,6 +68,12 @@ import { HeadphonesIcon, ListIcon, PlusIcon, SettingsIcon, TypeIcon } from "./co
 import { getTranslations } from "./lib/i18n";
 import { authClient } from "./lib/auth";
 import { pushSettings, syncSettings } from "./lib/settingsSync";
+import { hasSystemAI, refreshSystemAI, setSystemAI as rememberSystemAI } from "./lib/systemAI";
+
+// New chapters can be translated: on the app's key, or the user's
+function canTranslateWith(options: TranslateOptions): boolean {
+  return hasSystemAI() || !!options.apiKey.trim();
+}
 
 // What is open over the page: the chapter/novel lists, the settings, or a
 // header dropdown (new novel link, display options)
@@ -178,8 +184,10 @@ export default function Home() {
   const [novelUpdates, setNovelUpdates] = useState<Record<string, NovelUpdate>>({});
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const checkingUpdatesRef = useRef(false);
-  const { data: session } = authClient.useSession();
+  const { data: session, isPending: sessionPending } = authClient.useSession();
   const sessionId = session?.session.id ?? null;
+  // AI calls run on the app's key (see app/lib/systemAI.ts)
+  const [systemAI, setSystemAI] = useState(false);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
   const settingsPushRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -269,7 +277,7 @@ export default function Home() {
           } else if (status === "active" || status === "error") {
             resumed = true;
             resumeJobChapter(currentUrl);
-          } else if ((status === "abandoned" || status === "none") && options.apiKey.trim()) {
+          } else if ((status === "abandoned" || status === "none") && canTranslateWith(options)) {
             // The job died, or never reached the server: start it again
             resumed = true;
             runChapter(currentUrl, produceChapter(currentUrl, options));
@@ -283,7 +291,7 @@ export default function Home() {
       const pendingWindow = getPendingWindow();
       if (!resumed && pendingWindow && !isCleared(pendingWindow) && getLastJobStartAt() < mountedAt) {
         const options = getTranslateOptions(getSettings());
-        if (options.apiKey.trim()) {
+        if (canTranslateWith(options)) {
           clearPendingWindow();
           startBackgroundJob(pendingWindow, options, getKnownChapters(pendingWindow), { remember: false }).catch(() => {});
         }
@@ -332,6 +340,28 @@ export default function Home() {
   useEffect(() => {
     document.documentElement.lang = settings.appLang;
   }, [settings.appLang]);
+
+  useEffect(() => {
+    setSystemAI(hasSystemAI());
+    if (sessionPending) return;
+    if (!sessionId) {
+      rememberSystemAI(false);
+      setSystemAI(false);
+      return;
+    }
+    const controller = new AbortController();
+    const refresh = () => refreshSystemAI(controller.signal).then(setSystemAI);
+    // Again when the app is brought back: access may have been given or taken away
+    const handleVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    refresh();
+    document.addEventListener("visibilitychange", handleVisible);
+    return () => {
+      controller.abort();
+      document.removeEventListener("visibilitychange", handleVisible);
+    };
+  }, [sessionId, sessionPending]);
 
   // A signed-in user's settings come from their account, again whenever the
   // app is brought back (they may have been changed on another device)
@@ -662,7 +692,7 @@ export default function Home() {
   function resumeJobChapter(chapterUrl: string) {
     const options = getTranslateOptions(getSettings());
     const restart = () =>
-      options.apiKey.trim()
+      canTranslateWith(options)
         ? startBackgroundJob(chapterUrl, options, getKnownChapters(chapterUrl, chapterUrl), { force: true })
         : Promise.resolve(null);
     return runChapter(chapterUrl, async (signal, onMeta, onText, isShown) => ({
@@ -699,7 +729,7 @@ export default function Home() {
       opening = loadSavedChapter(saved);
       // Keep the following chapters translating ahead in the background
       const options = getTranslateOptions(settings);
-      if (options.apiKey.trim()) {
+      if (canTranslateWith(options)) {
         startBackgroundJob(targetUrl, options, getKnownChapters(targetUrl)).catch(() => {});
       }
     } else {
@@ -767,7 +797,7 @@ export default function Home() {
       clearPendingWindow();
       return;
     }
-    if (!url.trim() || !getApiKeyForModel(settings)?.trim()) return;
+    if (!url.trim() || !canTranslateWith(getTranslateOptions(settings))) return;
 
     const session = ++autoSessionRef.current;
     const running = () => autoModeRef.current && autoSessionRef.current === session;
@@ -944,8 +974,8 @@ export default function Home() {
 
   const isLoading = fetching || simplifying;
   loadingRef.current = isLoading;
-  const hasApiKey = !!getApiKeyForModel(settings)?.trim();
-  // Saved chapters open without an API key; new ones need one to be translated
+  const hasApiKey = systemAI || !!getApiKeyForModel(settings)?.trim();
+  // Saved chapters open without an API key; new ones need one to be translated (or the app's)
   // Also while a chapter is translating: it goes on off screen
   const canNavigate = (target: string) => hasApiKey || savedChapters.some((c) => c.url === target);
   const buttonLabel = fetching
@@ -1433,7 +1463,7 @@ export default function Home() {
           }
         >
           <TabPanel idPrefix="settings" active={settingsTab}>
-            {settingsTab === "ai" && <AISettingsPanel settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
+            {settingsTab === "ai" && <AISettingsPanel settings={settings} systemAI={systemAI} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "speech" && <SpeechSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "general" && <GeneralSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "account" && <AccountPanel textColor={textColor} t={t} />}

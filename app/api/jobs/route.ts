@@ -14,6 +14,7 @@ import {
   runAndContinue,
   sanitizeKnown,
 } from "../../lib/server/jobs";
+import { resolveAiAccess } from "../../lib/server/aiAccess";
 
 export const maxDuration = 300;
 
@@ -33,7 +34,8 @@ export async function POST(req: Request) {
     if (!url || typeof url !== "string" || url.length > 2048) {
       return Response.json({ error: "Missing URL" }, { status: 400 });
     }
-    if (!apiKey || typeof apiKey !== "string") {
+    const access = await resolveAiAccess(req, apiKey, model);
+    if (!access) {
       return Response.json({ error: "API key is required. Set it in Settings." }, { status: 400 });
     }
     const knownChapters = sanitizeKnown(known);
@@ -55,8 +57,10 @@ export async function POST(req: Request) {
         url,
         remaining: 1 + PREFETCH_CHAPTERS,
         known: knownChapters,
-        apiKey,
-        model,
+        // The app's key is read again by each step, never passed between them
+        apiKey: access.system ? "" : access.apiKey,
+        system: access.system,
+        model: access.model,
         customPrompt,
         glossary: terms,
         reasoningEffort,

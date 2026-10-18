@@ -1,4 +1,5 @@
 import { isOpenAIReasoningModel } from "../types";
+import { openAIBaseUrl, redactSystemKey } from "./aiAccess";
 
 // One-shot (non-streaming) model calls for short tasks: title translation,
 // listing a chapter's names. Chapters themselves stream (see simplify.ts).
@@ -36,7 +37,7 @@ interface CompleteParams {
 // The failed call is otherwise invisible to the user; log why
 async function fail(task: string, provider: string, res: Response): Promise<never> {
   const body = await res.text().catch(() => "");
-  console.error(`[${task}] ${provider} error ${res.status}: ${body.slice(0, 300)}`);
+  console.error(`[${task}] ${provider} error ${res.status}: ${redactSystemKey(body).slice(0, 300)}`);
   throw new ModelCallError(provider, res.status);
 }
 
@@ -63,7 +64,7 @@ export async function complete({ apiKey, model, system, input, maxTokens, task, 
   // Reasoning models (GPT-5+, o-series) reject a custom temperature on Chat Completions
   if (isOpenAIReasoningModel(model)) {
     const call = (effort: string) =>
-      fetch("https://api.openai.com/v1/responses", {
+      fetch(`${openAIBaseUrl(apiKey)}/responses`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({ model, instructions: system, input, reasoning: { effort } }),
@@ -71,7 +72,7 @@ export async function complete({ apiKey, model, system, input, maxTokens, task, 
     let res = await call(reasoningEffort);
     // Models that must reason a little reject "none"
     if (res.status === 400 && reasoningEffort === "none") {
-      console.error(`[${task}] ${model} rejected reasoning effort "none": ${(await res.text().catch(() => "")).slice(0, 200)}`);
+      console.error(`[${task}] ${model} rejected reasoning effort "none": ${redactSystemKey(await res.text().catch(() => "")).slice(0, 200)}`);
       res = await call("low");
     }
     if (!res.ok) return fail(task, "OpenAI", res);
@@ -111,7 +112,7 @@ export async function complete({ apiKey, model, system, input, maxTokens, task, 
   }
 
   // OpenAI / OpenRouter (OpenAI-compatible)
-  const baseUrl = provider === "openrouter" ? "https://openrouter.ai/api/v1" : "https://api.openai.com/v1";
+  const baseUrl = provider === "openrouter" ? "https://openrouter.ai/api/v1" : openAIBaseUrl(apiKey);
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },

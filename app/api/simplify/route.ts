@@ -1,6 +1,7 @@
 import { createSimplifyStream } from "../../lib/server/simplify";
 import { STREAM_NONCE_HEADER } from "../../lib/stream";
 import { sanitizeTerms } from "../../lib/glossary";
+import { resolveAiAccess } from "../../lib/server/aiAccess";
 
 export async function POST(req: Request) {
   try {
@@ -10,7 +11,8 @@ export async function POST(req: Request) {
       return Response.json({ error: "Missing text" }, { status: 400 });
     }
 
-    if (!apiKey || typeof apiKey !== "string") {
+    const access = await resolveAiAccess(req, apiKey, model);
+    if (!access) {
       return Response.json(
         { error: "API key is required. Set it in Settings." },
         { status: 400 }
@@ -24,8 +26,8 @@ export async function POST(req: Request) {
 
     const { stream, nonce } = await createSimplifyStream({
       text,
-      apiKey,
-      model,
+      apiKey: access.apiKey,
+      model: access.model,
       lang,
       customPrompt,
       glossary: terms,

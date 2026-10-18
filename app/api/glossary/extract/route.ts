@@ -1,6 +1,6 @@
-import { DEFAULT_AI_MODEL } from "../../../lib/types";
 import { sanitizeTerms } from "../../../lib/glossary";
 import { extractTerms } from "../../../lib/server/extractTerms";
+import { resolveAiAccess } from "../../../lib/server/aiAccess";
 
 export const maxDuration = 60;
 
@@ -12,7 +12,8 @@ const MAX_TEXT_LENGTH = 200_000;
 export async function POST(req: Request) {
   try {
     const { apiKey, model, source, translation, known, url } = await req.json();
-    if (!apiKey || typeof apiKey !== "string") {
+    const access = await resolveAiAccess(req, apiKey, model);
+    if (!access) {
       return Response.json({ error: "API key is required. Set it in Settings." }, { status: 400 });
     }
     if (
@@ -29,8 +30,8 @@ export async function POST(req: Request) {
     }
 
     const terms = await extractTerms({
-      apiKey,
-      model: typeof model === "string" && model ? model : DEFAULT_AI_MODEL,
+      apiKey: access.apiKey,
+      model: access.model,
       source,
       translation,
       known: knownTerms,

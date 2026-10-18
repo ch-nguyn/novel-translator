@@ -7,12 +7,14 @@ import Switch from "./Switch";
 
 interface Props {
   settings: ReaderSettings;
+  // Translating on the app's key: the model and key below are not used
+  systemAI?: boolean;
   textColor: string;
   t: Translations;
   onUpdate: (patch: Partial<ReaderSettings>) => void;
 }
 
-export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Props) {
+export default function AISettingsPanel({ settings, systemAI, textColor, t, onUpdate }: Props) {
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const inputStyle = {
@@ -66,6 +68,11 @@ export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Pr
 
   return (
     <div className="flex flex-col gap-5">
+      {systemAI && (
+        <p className="text-sm px-3 py-2 rounded-lg" style={{ backgroundColor: textColor + "10" }}>
+          {t.systemAINote}
+        </p>
+      )}
       <div>
         <label className="text-sm font-medium block mb-2">{t.aiModel}</label>
         <div

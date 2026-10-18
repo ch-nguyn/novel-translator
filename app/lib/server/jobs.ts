@@ -8,6 +8,7 @@ import { createSimplifyStream } from "./simplify";
 import { parseTranslationStream } from "../stream";
 import { translateTitleBatch } from "./translateTitle";
 import { extractTerms } from "./extractTerms";
+import { systemApiKey } from "./aiAccess";
 
 // Background translation jobs.
 //
@@ -33,8 +34,9 @@ import { extractTerms } from "./extractTerms";
 // they are added to the glossary handed to the next chapter, so the chapters
 // of one window name things alike before the device has seen any of them.
 //
-// The API key only travels in request bodies between invocations; it is never
-// written to Redis. Steps passed between invocations are HMAC-signed.
+// The user's API key only travels in request bodies between invocations; it is
+// never written to Redis. A job on the app's key carries `system` instead and
+// reads the key from the environment. Steps passed between invocations are HMAC-signed.
 
 const CHAPTER_TTL_SECONDS = 7 * 24 * 60 * 60;
 const JOB_TTL_SECONDS = 24 * 60 * 60;
@@ -66,6 +68,8 @@ export interface JobStep extends TranslateOptions {
   known: Record<string, string | null>;
   // The novel's glossary, plus the names found by the window's chapters so far
   glossary: GlossaryTerm[];
+  // Runs on the app's key (`apiKey` is then empty)
+  system?: boolean;
 }
 
 let redis: Redis | null | undefined;
@@ -246,6 +250,7 @@ async function translateChapter(
 ): Promise<{ nextUrl: string | null; newTerms: GlossaryTerm[] } | null> {
   const key = chaptersKey(step.deviceId);
   const claim = claimKey(step.deviceId, url);
+  const apiKey = step.system ? systemApiKey() : step.apiKey;
 
   let chapter: ChapterJob = {
     url,
@@ -309,7 +314,7 @@ async function translateChapter(
 
     const { stream, nonce } = await createSimplifyStream({
       text: content.text,
-      apiKey: step.apiKey,
+      apiKey,
       model: step.model,
       lang: content.lang,
       customPrompt: step.customPrompt,
@@ -343,12 +348,12 @@ async function translateChapter(
     let { novelName, chapterName } = content;
     const [titles, newTerms] = await Promise.all([
       content.lang === "zh" && chapterName
-        ? translateTitleBatch(step.apiKey, step.model, [chapterName, novelName], ZH_TITLE_PROMPT).catch(() => null)
+        ? translateTitleBatch(apiKey, step.model, [chapterName, novelName], ZH_TITLE_PROMPT).catch(() => null)
         : null,
       step.useGlossary === false
         ? []
         : extractTerms({
-            apiKey: step.apiKey,
+            apiKey,
             model: step.model,
             source: content.text,
             translation: text,
@@ -404,6 +409,7 @@ export function signStep(step: JobStep): string {
     step.remaining,
     step.known,
     step.apiKey,
+    step.system ?? false,
     step.model,
     step.customPrompt ?? null,
     step.glossary ?? [],

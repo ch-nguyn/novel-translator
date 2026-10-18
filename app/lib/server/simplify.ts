@@ -1,5 +1,6 @@
 import { DEFAULT_AI_MODEL, GlossaryTerm, isOpenAIReasoningModel } from "../types";
 import { glossaryPrompt } from "../glossary";
+import { openAIBaseUrl, redactSystemKey } from "./aiAccess";
 import { endRecord, newStreamNonce, STREAM_ENDED_EARLY_ERROR, TokenUsage } from "../stream";
 
 const VI_PROMPT = `Bạn là biên tập viên chuyên viết lại truyện tiên hiệp/kiếm hiệp tiếng Việt (dịch từ tiếng Trung). Văn gốc thường lủng củng, ngữ pháp sai, từ ngữ khó hiểu. Nhiệm vụ của bạn là viết lại cho mượt mà, đúng văn phong cổ phong nhưng vẫn dễ đọc.
@@ -114,7 +115,7 @@ type SseEvent = any;
 
 async function readProviderError(res: Response, provider: string): Promise<Error> {
   const err = await res.json().catch(() => null);
-  return new Error(err?.error?.message || `${provider} error: ${res.status}`);
+  return new Error(redactSystemKey(err?.error?.message || `${provider} error: ${res.status}`));
 }
 
 // Incremental Server-Sent Events parser (WHATWG spec): lines end in LF, CRLF or
@@ -214,14 +215,14 @@ function sseToTextStream(
       }
 
       if (!state.error && !state.finished) state.error = STREAM_ENDED_EARLY_ERROR;
-      emit(endRecord(nonce, state.usage, state.error));
+      emit(endRecord(nonce, state.usage, state.error && redactSystemKey(state.error)));
       controller.close();
     },
   });
 }
 
 async function streamOpenAIResponses({ apiKey, model, text, systemPrompt, effort, signal, nonce }: ProviderRequest) {
-  const res = await fetch("https://api.openai.com/v1/responses", {
+  const res = await fetch(`${openAIBaseUrl(apiKey)}/responses`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -270,7 +271,7 @@ async function streamOpenAIResponses({ apiKey, model, text, systemPrompt, effort
 
 async function streamOpenAI(
   { apiKey, model, text, systemPrompt, signal, nonce }: ProviderRequest,
-  baseUrl = "https://api.openai.com/v1",
+  baseUrl = openAIBaseUrl(apiKey),
   extraBody: Record<string, unknown> = {}
 ) {
   const res = await fetch(`${baseUrl}/chat/completions`, {

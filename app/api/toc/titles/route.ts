@@ -1,5 +1,6 @@
 import { hasChinese } from "../../../lib/search";
 import { cachedTranslations } from "../../../lib/server/cachedTranslations";
+import { resolveAiAccess } from "../../../lib/server/aiAccess";
 
 // Chapter titles of a table of contents in Vietnamese, for the part the
 // reader is looking at. Cached for every reader (see cachedTranslations).
@@ -21,8 +22,8 @@ export async function POST(req: Request) {
   if (!titles || titles.length > MAX_TITLES || !titles.every((t) => typeof t === "string" && t.length <= MAX_TITLE_CHARS)) {
     return Response.json({ error: "Invalid titles" }, { status: 400 });
   }
-  const apiKey = typeof body?.apiKey === "string" ? body.apiKey.trim() : "";
   const chinese = [...new Set((titles as string[]).filter(hasChinese))];
+  const apiKey = chinese.length > 0 ? ((await resolveAiAccess(req, body?.apiKey, undefined))?.apiKey ?? "") : "";
   const found = await cachedTranslations(chinese, apiKey, {
     prompt: TITLES_PROMPT,
     cacheKey: (title) => `toc:title:${title}`,
