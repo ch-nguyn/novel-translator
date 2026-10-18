@@ -1,7 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import { SavedChapter } from "../lib/types";
 import { Translations } from "../lib/i18n";
+import { foldAccents } from "../lib/search";
+
+// With fewer novels the whole list fits on screen; no filter box
+const FILTER_FROM = 5;
 
 interface NovelInfo {
   slug: string;
@@ -47,7 +52,11 @@ export default function SavedNovelsList({
   onSelectNovel,
   onClearNovel,
 }: Props) {
+  const [filter, setFilter] = useState("");
   const novels = getNovels(chapters);
+  // Accents optional: "pham nhan" finds "Phàm Nhân Tu Tiên"
+  const query = foldAccents(filter.trim());
+  const shown = query ? novels.filter((novel) => foldAccents(novel.name).includes(query)) : novels;
 
   if (novels.length === 0) {
     return (
@@ -58,36 +67,55 @@ export default function SavedNovelsList({
   }
 
   return (
-    <ul>
-      {novels.map((novel) => {
-        const isActive = novel.slug === currentNovelSlug;
-        return (
-          <li
-            key={novel.slug}
-            className="flex items-center gap-2 rounded-lg"
-            style={{ backgroundColor: isActive ? "#3b82f620" : "transparent" }}
-          >
-            <button
-              onClick={() => onSelectNovel(novel.slug)}
-              aria-current={isActive ? "true" : undefined}
-              className="text-left flex-1 min-w-0 cursor-pointer px-3 py-2.5 transition-colors hover:opacity-70"
+    <div>
+      {/* Kept while filtering, even if deleting brought the count under the threshold */}
+      {(novels.length >= FILTER_FROM || filter) && (
+        <input
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder={t.filterNovels}
+          aria-label={t.filterNovels}
+          className="w-full px-3 py-2 mb-2 rounded-lg border text-sm"
+          style={{ backgroundColor: "transparent", borderColor: textColor + "20", color: textColor }}
+        />
+      )}
+      {shown.length === 0 && (
+        <p className="p-4 text-center text-sm" style={{ color: textColor + "60" }}>
+          {t.noMatchingNovels}
+        </p>
+      )}
+      <ul>
+        {shown.map((novel) => {
+          const isActive = novel.slug === currentNovelSlug;
+          return (
+            <li
+              key={novel.slug}
+              className="flex items-center gap-2 rounded-lg"
+              style={{ backgroundColor: isActive ? "#3b82f620" : "transparent" }}
             >
-              <p className="text-sm font-medium truncate" style={{ color: isActive ? "#3b82f6" : undefined }}>
-                {novel.name}
-              </p>
-              <p className="text-xs" style={{ color: textColor + "60" }}>
-                {novel.chapterCount} {t.chapters.toLowerCase()}
-              </p>
-            </button>
-            <button
-              onClick={() => onClearNovel(novel.slug)}
-              className="shrink-0 px-3 py-2 text-xs text-red-500 hover:text-red-700 cursor-pointer transition-colors"
-            >
-              {t.clear}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+              <button
+                onClick={() => onSelectNovel(novel.slug)}
+                aria-current={isActive ? "true" : undefined}
+                className="text-left flex-1 min-w-0 cursor-pointer px-3 py-2.5 transition-colors hover:opacity-70"
+              >
+                <p className="text-sm font-medium truncate" style={{ color: isActive ? "#3b82f6" : undefined }}>
+                  {novel.name}
+                </p>
+                <p className="text-xs" style={{ color: textColor + "60" }}>
+                  {novel.chapterCount} {t.chapters.toLowerCase()}
+                </p>
+              </button>
+              <button
+                onClick={() => onClearNovel(novel.slug)}
+                className="shrink-0 px-3 py-2 text-xs text-red-500 hover:text-red-700 cursor-pointer transition-colors"
+              >
+                {t.clear}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }

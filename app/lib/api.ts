@@ -2,6 +2,7 @@ import { GlossaryTerm, TranslatedChapter, TranslateOptions, ZH_TITLE_PROMPT } fr
 import { promptTerms } from "./glossary";
 import { extractNovelSlug, getGlossary } from "./storage";
 import { parseTranslationStream, STREAM_NONCE_HEADER } from "./stream";
+import { SearchCandidate, SearchErrorCode, SearchResponse } from "./search";
 
 // Pricing per million tokens: [input, output] in USD
 // Models not listed here have unknown pricing
@@ -47,11 +48,12 @@ export interface FetchContentResult {
 }
 
 // The first chapter's URL of the novel whose page `url` is
-export async function fetchFirstChapterUrl(url: string): Promise<string> {
+export async function fetchFirstChapterUrl(url: string, signal?: AbortSignal): Promise<string> {
   const res = await fetch("/api/resolve-chapter", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
+    signal,
   });
   if (!res.ok) {
     throw new Error(await readErrorMessage(res, "Failed to find the first chapter"));
@@ -84,6 +86,36 @@ export async function fetchChapterContent(
     nextUrl: data.nextUrl || null,
     lang: data.lang || "vi",
   };
+}
+
+export class SearchError extends Error {
+  code: SearchErrorCode | null;
+
+  constructor(code: SearchErrorCode | null, message: string) {
+    super(message);
+    this.name = "SearchError";
+    this.code = code;
+  }
+}
+
+// Novels on the supported sites named `query` (any language), or else exactly
+// `candidate` (a Chinese name guessed by an earlier search)
+export async function searchNovels(
+  params: { query: string; candidate?: SearchCandidate; apiKey: string; model: string },
+  signal?: AbortSignal
+): Promise<SearchResponse> {
+  const res = await fetch("/api/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+    signal,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => null);
+    const code = ["needKey", "badKey", "aiFailed", "invalid"].includes(err?.error) ? (err.error as SearchErrorCode) : null;
+    throw new SearchError(code, `Search failed (HTTP ${res.status})`);
+  }
+  return res.json();
 }
 
 export async function translateTitle(

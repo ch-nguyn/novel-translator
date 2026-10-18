@@ -4,9 +4,9 @@ import { complete } from "./llm";
 const DEFAULT_PROMPT = "Dịch tiêu đề truyện sau từ tiếng Trung sang phiên âm Hán Việt. KHÔNG được để lại bất kỳ chữ Trung Quốc nào. Số chương phải viết bằng số (VD: 第二十章 → Chương 20, 第一百零三章 → Chương 103). Chỉ trả về bản dịch, không giải thích.";
 
 // Falls back to the original title when the call fails
-async function translate(apiKey: string, model: string, title: string, prompt: string): Promise<string> {
+async function translate(apiKey: string, model: string, title: string, prompt: string, maxTokens = 200): Promise<string> {
   try {
-    return (await complete({ apiKey, model, system: prompt, input: title, maxTokens: 200, task: "translate-title" })) || title;
+    return (await complete({ apiKey, model, system: prompt, input: title, maxTokens, task: "translate-title" })) || title;
   } catch {
     return title;
   }
@@ -21,7 +21,8 @@ export async function translateTitleBatch(apiKey: string, model: string | undefi
   const combined = titles.map((t, i) => `[${i + 1}] ${t}`).join("\n");
   const batchPrompt = (prompt || DEFAULT_PROMPT) +
     `\n\nCó ${titles.length} tiêu đề cần dịch, mỗi tiêu đề trên một dòng có đánh số [1], [2],... Trả về bản dịch theo đúng format [1] ..., [2] ..., mỗi dòng một tiêu đề.`;
-  const result = await translate(apiKey, model || DEFAULT_AI_MODEL, combined, batchPrompt);
+  // Room for every line (search results translate a few dozen names at once)
+  const result = await translate(apiKey, model || DEFAULT_AI_MODEL, combined, batchPrompt, 200 + 40 * titles.length);
   return titles.map((_, i) => {
     const regex = new RegExp(`\\[${i + 1}\\]\\s*(.+)`);
     const match = result.match(regex);

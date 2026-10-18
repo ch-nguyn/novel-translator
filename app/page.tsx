@@ -43,6 +43,8 @@ import AISettingsPanel from "./components/AISettingsPanel";
 import GeneralSettings from "./components/GeneralSettings";
 import DisplaySettings from "./components/DisplaySettings";
 import LinkForm from "./components/LinkForm";
+import NovelSearch from "./components/NovelSearch";
+import { FoundNovel } from "./lib/search";
 import SavedChaptersList from "./components/SavedChaptersList";
 import SavedNovelsList from "./components/SavedNovelsList";
 import NavButtons from "./components/NavButtons";
@@ -149,6 +151,8 @@ export default function Home() {
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
   const [glossaryMessage, setGlossaryMessage] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // A search result's first-chapter lookup, called off when another chapter opens
+  const lookupRef = useRef<AbortController | null>(null);
   const scanAbortRef = useRef<AbortController | null>(null);
   const autoModeRef = useRef(false);
   const textRef = useRef<HTMLDivElement>(null);
@@ -397,6 +401,7 @@ export default function Home() {
     produce: ChapterProducer
   ): Promise<{ nextUrl: string | null } | null> {
     abortRef.current?.abort();
+    lookupRef.current?.abort();
     // Opening a chapter means the user is reading this novel (again)
     reviveNovel(extractNovelSlug(fetchUrl));
     const controller = new AbortController();
@@ -415,6 +420,8 @@ export default function Home() {
     window.scrollTo(0, 0);
 
     const onMeta = (meta: ChapterMeta) => {
+      // A chunk already on its way when another chapter took over
+      if (controller.signal.aborted) return;
       setTitle(meta.title);
       setNovelName(meta.novelName);
       setChapterName(meta.chapterName);
@@ -425,7 +432,9 @@ export default function Home() {
     };
 
     try {
-      const { chapter, fromJob } = await produce(controller.signal, onMeta, setSimplifiedText);
+      const { chapter, fromJob } = await produce(controller.signal, onMeta, (text) => {
+        if (!controller.signal.aborted) setSimplifiedText(text);
+      });
       const saved = await withStorageLock(() =>
         // The novel may have been deleted while this chapter was translating
         getClearedNovels().has(extractNovelSlug(fetchUrl)) ? null : saveTranslatedChapter(fetchUrl, chapter)
@@ -531,6 +540,7 @@ export default function Home() {
   }
 
   async function loadSavedChapter(chapter: SavedChapter) {
+    lookupRef.current?.abort();
     setNotice(null);
     setUrl(chapter.url);
     setOpenUrl(chapter.url);
@@ -597,6 +607,46 @@ export default function Home() {
 
     autoModeRef.current = false;
     setAutoTranslating(false);
+  }
+
+  // A novel picked from the search results: where the reader left off when it
+  // is saved already, else its first chapter
+  async function openFoundNovel(novel: FoundNovel) {
+    const slug = extractNovelSlug(novel.url);
+    const saved = savedChapters.some((c) => c.novelSlug === slug);
+    closeOverlay();
+    if (!saved && !hasApiKey) return setNotice({ kind: "error", message: t.needApiKey });
+    // The reader moves on to this novel: stop translating the open one (and auto mode)
+    autoModeRef.current = false;
+    setAutoTranslating(false);
+    abortRef.current?.abort();
+    lookupRef.current?.abort();
+    if (saved) return handleSelectNovel(slug);
+
+    const lookup = new AbortController();
+    lookupRef.current = lookup;
+    // The stopped chapter no longer owns the loading state; the lookup does
+    abortRef.current = null;
+    setSimplifying(false);
+    setFetching(true);
+    setNotice(null);
+    let chapterUrl: string;
+    try {
+      chapterUrl = await fetchFirstChapterUrl(novel.url, lookup.signal);
+    } catch (e: unknown) {
+      if (!lookup.signal.aborted) setNotice({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      return;
+    } finally {
+      // Not when another lookup took over, or a chapter opened meanwhile is loading (its own state)
+      if (lookupRef.current === lookup) {
+        lookupRef.current = null;
+        if (abortRef.current === null) setFetching(false);
+      }
+    }
+    // Another chapter was opened meanwhile
+    if (lookup.signal.aborted) return;
+    setUrl(chapterUrl);
+    runChapter(chapterUrl, produceChapter(chapterUrl, getTranslateOptions(settings)));
   }
 
   function handleSelectNovel(slug: string) {
@@ -770,7 +820,35 @@ export default function Home() {
     }
   }, [speech.paragraph]);
 
-  const linkForm = (autoFocus: boolean) => (
+  // Saved chapters per novel, to mark the search results already being read
+  const libraryCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const chapter of savedChapters) counts.set(chapter.novelSlug, (counts.get(chapter.novelSlug) ?? 0) + 1);
+    return counts;
+  }, [savedChapters]);
+
+  // Finding a novel by name, or opening it from a link
+  const startPanel = (autoFocus: boolean) => (
+    <div className="flex flex-col gap-4">
+      <NovelSearch
+        t={t}
+        textColor={textColor}
+        apiKey={getApiKeyForModel(settings)}
+        model={settings.aiModel}
+        library={libraryCounts}
+        autoFocus={autoFocus}
+        onOpen={openFoundNovel}
+      />
+      <div className="flex items-center gap-3 text-xs" style={{ color: textColor + "80" }}>
+        <span className="flex-1 border-t" style={{ borderColor: textColor + "20" }} />
+        {t.orPasteLink}
+        <span className="flex-1 border-t" style={{ borderColor: textColor + "20" }} />
+      </div>
+      {linkForm()}
+    </div>
+  );
+
+  const linkForm = () => (
     <LinkForm
       t={t}
       textColor={textColor}
@@ -786,7 +864,6 @@ export default function Home() {
       buttonLabel={buttonLabel}
       hasApiKey={hasApiKey}
       onAddApiKey={() => openSettings("ai")}
-      autoFocus={autoFocus}
     />
   );
 
@@ -875,7 +952,7 @@ export default function Home() {
 
           {overlay === "new" && (
             <Popover label={t.newNovel} textColor={textColor} bgColor={settings.bgColor} onClose={closeOverlay}>
-              {linkForm(true)}
+              {startPanel(true)}
             </Popover>
           )}
           {overlay === "display" && (
@@ -891,7 +968,7 @@ export default function Home() {
           <section className="max-w-xl mx-auto py-6 sm:py-12">
             <h1 className="text-xl sm:text-2xl font-semibold text-center mb-6">{t.emptyTitle}</h1>
             {noticeBanner}
-            {linkForm(false)}
+            {startPanel(false)}
           </section>
         ) : (
           <>

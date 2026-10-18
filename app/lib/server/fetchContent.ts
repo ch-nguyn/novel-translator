@@ -189,7 +189,7 @@ const MAX_REDIRECTS = 5;
 const FETCH_TIMEOUT_MS = 20_000;
 
 // A fetched page and the URL it ended up at after redirects, which relative links resolve against
-interface FetchedPage {
+export interface FetchedPage {
   html: string;
   url: string;
 }
@@ -245,7 +245,7 @@ async function resolvesToPublic(hostname: string): Promise<boolean> {
   }
 }
 
-async function fetchWithCheerio(url: string): Promise<FetchedPage | null> {
+export async function fetchWithCheerio(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<FetchedPage | null> {
   // Follow redirects by hand so every hop is checked against the supported sites
   let res: Response;
   for (let hop = 0; ; hop++) {
@@ -258,7 +258,7 @@ async function fetchWithCheerio(url: string): Promise<FetchedPage | null> {
         Referer: new URL(url).origin + "/",
       },
       redirect: "manual",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
     if (!location) break;
