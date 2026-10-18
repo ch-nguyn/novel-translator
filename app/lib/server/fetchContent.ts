@@ -227,6 +227,8 @@ function parseHtml(html: string, siteConfig: SiteConfig, baseUrl: string) {
 
 const MAX_REDIRECTS = 5;
 const FETCH_TIMEOUT_MS = 20_000;
+// How long a site with mirrors is waited for before they are asked too
+const MIRROR_AFTER_MS = 4000;
 
 // A fetched page and the URL it ended up at after redirects, which relative links resolve against
 export interface FetchedPage {
@@ -402,27 +404,41 @@ export class FetchContentError extends Error {
 }
 
 // `url`'s page by a plain fetch, from a mirror of its site if the site fails
-// or serves a page that is not `usable` (an error page sent as a success)
+// or serves a page that is not `usable` (an error page sent as a success).
+// A site that has not answered after a few seconds (biquuge.com stalls for a
+// minute at times) is not waited for: its mirrors are asked too, and the
+// first usable page wins.
 async function fetchFromSiteOrMirror(url: string, usable?: (page: FetchedPage) => boolean): Promise<FetchedPage | null> {
   const mirrors = mirrorUrls(url);
+  if (mirrors.length === 0) return fetchWithCheerio(url);
   let failure: unknown = null;
   let unusable: FetchedPage | null = null;
+  const own = fetchWithCheerio(url).then(
+    (page) => {
+      if (page && (!usable || usable(page))) return page;
+      unusable = page;
+      throw new Error("unusable");
+    },
+    (e) => {
+      failure = e;
+      throw e;
+    }
+  );
+  const answered = await Promise.race([own.catch(() => null), new Promise<undefined>((r) => setTimeout(r, MIRROR_AFTER_MS))]);
+  if (answered) return answered;
+  const mirrored = mirrors.map((mirror) =>
+    fetchWithCheerio(mirror).then((page) => {
+      if (page && (!usable || usable(page))) return page;
+      throw new Error("unusable");
+    })
+  );
   try {
-    const page = await fetchWithCheerio(url);
-    if (mirrors.length === 0) return page;
-    if (page && (!usable || usable(page))) return page;
-    unusable = page;
-  } catch (e) {
-    if (mirrors.length === 0) throw e;
-    failure = e;
+    return await Promise.any([own, ...mirrored]);
+  } catch {
+    // The site's own failure tells more than the mirrors'
+    if (failure) throw failure;
+    return unusable;
   }
-  for (const mirror of mirrors) {
-    const mirrored = await fetchWithCheerio(mirror).catch(() => null);
-    if (mirrored && (!usable || usable(mirrored))) return mirrored;
-  }
-  // The site's own failure tells more than the mirrors'
-  if (failure) throw failure;
-  return unusable;
 }
 
 // Whether a fetched page holds a chapter's text
@@ -470,16 +486,19 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
   let finalNextUrl = result.nextUrl;
   const maxSubPages = 20;
   let subPage = 0;
+  const visited = new Set([canonicalUrl(page.url)]);
 
   // Sub-page links come from the scraped page; only follow them to supported sites
-  while (nextPageUrl && subPage < maxSubPages && getSiteConfig(nextPageUrl)) {
-    const subPageResult = await fetchFromSiteOrMirror(nextPageUrl, hasChapter);
+  while (nextPageUrl && getSiteConfig(nextPageUrl) && !visited.has(canonicalUrl(nextPageUrl))) {
+    visited.add(canonicalUrl(nextPageUrl));
     // Never return part of a chapter as if it were the whole chapter
-    if (!subPageResult) {
-      throw new FetchContentError(`Could not load part ${subPage + 2} of this chapter. Please try again.`, 502);
-    }
+    const partMissing = () =>
+      new FetchContentError(`Could not load part ${subPage + 2} of this chapter. Please try again.`, 502);
+    if (subPage >= maxSubPages) throw partMissing();
+    const subPageResult = await fetchFromSiteOrMirror(nextPageUrl, hasChapter);
+    if (!subPageResult) throw partMissing();
     const subResult = parseHtml(subPageResult.html, getSiteConfig(subPageResult.url)!, subPageResult.url);
-    if (!subResult || !subResult.text.trim()) break;
+    if (!subResult || !subResult.text.trim()) throw partMissing();
     fullText += "\n" + subResult.text;
     // The last sub-page has the real "next chapter" link
     if (subResult.nextUrl) finalNextUrl = subResult.nextUrl;

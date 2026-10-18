@@ -74,6 +74,7 @@ export async function startBackgroundJob(
   reviveNovel(extractNovelSlug(url));
   // Before the request: the app may be closed before the response arrives
   if (remember) setPendingWindow(url);
+  await pendingCancel;
 
   const glossary = options.useGlossary === false ? [] : promptTerms(getGlossary(extractNovelSlug(url)));
   const body = JSON.stringify({ deviceId: getDeviceId(), url, known, force, glossary, ...options });
@@ -220,12 +221,18 @@ export async function watchJobChapter(
 // `cancelNovel` also stops the running job if it is translating that novel.
 export async function acknowledgeJobChapters(urls: string[], cancelNovel?: string) {
   if (jobsUnavailable || (urls.length === 0 && !cancelNovel)) return;
-  await fetch("/api/jobs", {
+  const request = fetch("/api/jobs", {
     method: "DELETE",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ deviceId: getDeviceId(), urls, cancelNovel }),
-  }).catch(() => {});
+  }).then(() => {}, () => {});
+  // Cancelling matches the novel, not a job: a job started before it arrives would be cancelled too
+  if (cancelNovel) pendingCancel = request;
+  await request;
 }
+
+// The latest request cancelling a novel's job; new jobs wait for it
+let pendingCancel: Promise<void> = Promise.resolve();
 
 // The user cleared a novel: stop translating ahead and drop what the server holds for it
 export async function discardNovelJobs(novelSlug: string) {

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { SavedChapter } from "../lib/types";
 import { Translations } from "../lib/i18n";
 import { foldAccents } from "../lib/search";
+import { NovelUpdate } from "../lib/storage";
 
 // With fewer novels the whole list fits on screen; no filter box
 const FILTER_FROM = 5;
@@ -17,6 +18,10 @@ interface NovelInfo {
 
 interface Props {
   chapters: SavedChapter[];
+  // What each novel's site listed when last checked
+  updates: Record<string, NovelUpdate>;
+  checking: boolean;
+  onCheck: () => void;
   textColor: string;
   currentNovelSlug: string | null;
   t: Translations;
@@ -46,6 +51,9 @@ function getNovels(chapters: SavedChapter[]): NovelInfo[] {
 
 export default function SavedNovelsList({
   chapters,
+  updates,
+  checking,
+  onCheck,
   textColor,
   currentNovelSlug,
   t,
@@ -68,6 +76,16 @@ export default function SavedNovelsList({
 
   return (
     <div>
+      <div className="flex justify-end mb-1">
+        <button
+          onClick={onCheck}
+          disabled={checking}
+          className="px-2 py-1 text-xs cursor-pointer hover:underline disabled:cursor-default disabled:no-underline disabled:animate-pulse"
+          style={{ color: textColor + "99" }}
+        >
+          {checking ? t.checkingUpdates : `↻ ${t.checkUpdates}`}
+        </button>
+      </div>
       {/* Kept while filtering, even if deleting brought the count under the threshold */}
       {(novels.length >= FILTER_FROM || filter) && (
         <input
@@ -88,6 +106,8 @@ export default function SavedNovelsList({
       <ul>
         {shown.map((novel) => {
           const isActive = novel.slug === currentNovelSlug;
+          const update = updates[novel.slug];
+          const fresh = update ? update.total - update.seen : 0;
           return (
             <li
               key={novel.slug}
@@ -103,7 +123,14 @@ export default function SavedNovelsList({
                   {novel.name}
                 </p>
                 <p className="text-xs" style={{ color: textColor + "60" }}>
-                  {novel.chapterCount} {t.chapters.toLowerCase()}
+                  {update
+                    ? `${novel.chapterCount} ${t.savedChapters.toLowerCase()} · ${update.total} ${t.chapters.toLowerCase()}`
+                    : `${novel.chapterCount} ${t.chapters.toLowerCase()}`}
+                  {fresh > 0 && (
+                    <span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-medium text-white bg-blue-500">
+                      {t.newChapters.replace("{n}", String(fresh))}
+                    </span>
+                  )}
                 </p>
               </button>
               <button

@@ -4,7 +4,7 @@ import { Fragment, useState, useRef, useCallback, useEffect, useMemo } from "rea
 import { DEFAULT_AI_MODEL, DEFAULT_AI_VOICE, GlossaryTerm, SavedChapter, ReaderSettings, TranslatedChapter, TranslateOptions, getTextColor, getApiKeyForModel, getTranslateOptions } from "./lib/types";
 import {
   getSavedChapters,
-  saveChapter,
+  updateChapterLinks,
   clearNovelChapters,
   extractNovelSlug,
   getCurrentUrl,
@@ -23,7 +23,12 @@ import {
   clearPendingWindow,
   getGlossary,
   isGlossaryStorageKey,
+  getNovelUpdates,
+  NovelUpdate,
+  MAX_CHAPTERS_PER_NOVEL,
 } from "./lib/storage";
+import { checkNovelUpdates, getCachedToc } from "./lib/toc";
+import { exportNovelEpub, exportNovelTxt, orderNovelChapters } from "./lib/exportNovel";
 import { applyNames, editTerm, renameTerm, termKey } from "./lib/glossary";
 import { exportGlossary, importGlossary, scanSavedChapters, SCAN_CHAPTERS, updateGlossary } from "./lib/glossaryActions";
 import { ChapterMeta, fetchChapterContent, fetchFirstChapterUrl, translateChapterDirect } from "./lib/api";
@@ -47,6 +52,7 @@ import LinkForm from "./components/LinkForm";
 import NovelSearch from "./components/NovelSearch";
 import { FoundNovel } from "./lib/search";
 import SavedChaptersList from "./components/SavedChaptersList";
+import ChapterDirectory from "./components/ChapterDirectory";
 import SavedNovelsList from "./components/SavedNovelsList";
 import NavButtons from "./components/NavButtons";
 import ContactPanel from "./components/ContactPanel";
@@ -64,6 +70,10 @@ import { getTranslations } from "./lib/i18n";
 // header dropdown (new novel link, display options)
 type Overlay = "none" | "library" | "settings" | "new" | "display";
 type LibraryTab = "chapters" | "names" | "novels";
+// The chapters tab: the ones saved on this device, or every chapter the site lists
+type ChapterView = "saved" | "toc";
+// Novels whose sites are asked for new chapters, the most recently read first
+const MAX_CHECKED_NOVELS = 20;
 type SettingsTab = "ai" | "speech" | "general" | "contact";
 
 function HeaderButton({
@@ -73,6 +83,7 @@ function HeaderButton({
   active,
   textColor,
   showLabel,
+  dot,
 }: {
   label: string;
   icon: React.ReactNode;
@@ -80,6 +91,8 @@ function HeaderButton({
   active: boolean;
   textColor: string;
   showLabel?: boolean;
+  // A marker on the icon, e.g. new chapters in the library
+  dot?: string;
 }) {
   return (
     <button
@@ -87,10 +100,11 @@ function HeaderButton({
       aria-label={label}
       aria-expanded={active}
       title={label}
-      className="h-9 px-2.5 rounded-lg flex items-center gap-1.5 text-sm font-medium cursor-pointer transition-colors shrink-0 hover:opacity-70"
+      className="relative h-9 px-2.5 rounded-lg flex items-center gap-1.5 text-sm font-medium cursor-pointer transition-colors shrink-0 hover:opacity-70"
       style={{ color: textColor, backgroundColor: active ? textColor + "18" : "transparent" }}
     >
       {icon}
+      {dot && <span className="absolute top-1.5 left-6 w-2 h-2 rounded-full bg-blue-500" role="img" aria-label={dot} title={dot} />}
       {showLabel && <span className="hidden sm:inline">{label}</span>}
     </button>
   );
@@ -109,6 +123,9 @@ export default function Home() {
   const [url, setUrl] = useState("");
   // The chapter shown (or being opened); empty when none is
   const [openUrl, setOpenUrl] = useState("");
+  // For async work that finishes later: the chapter shown by then
+  const openUrlRef = useRef("");
+  openUrlRef.current = openUrl;
   const [simplifiedText, setSimplifiedText] = useState("");
   const [fetching, setFetching] = useState(false);
   const [simplifying, setSimplifying] = useState(false);
@@ -120,6 +137,7 @@ export default function Home() {
   const [savedChapters, setSavedChapters] = useState<SavedChapter[]>([]);
   const [overlay, setOverlay] = useState<Overlay>("none");
   const [libraryTab, setLibraryTab] = useState<LibraryTab>("chapters");
+  const [chapterView, setChapterView] = useState<ChapterView>("toc");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
   const [headerHidden, setHeaderHidden] = useState(false);
   const [settings, setSettings] = useState<ReaderSettings>({
@@ -151,6 +169,10 @@ export default function Home() {
   const [renameFrom, setRenameFrom] = useState<string | null>(null);
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
   const [glossaryMessage, setGlossaryMessage] = useState<string | null>(null);
+  // How many chapters each novel's site listed when last checked
+  const [novelUpdates, setNovelUpdates] = useState<Record<string, NovelUpdate>>({});
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const checkingUpdatesRef = useRef(false);
   // The chapter being fetched/translated on screen. Opening another chapter
   // leaves it translating (and saving) in the background, off screen.
   const abortRef = useRef<AbortController | null>(null);
@@ -167,7 +189,9 @@ export default function Home() {
   const loadingRef = useRef(false);
   const t = getTranslations(settings.appLang);
 
-  const currentNovelSlug = url ? extractNovelSlug(url) : null;
+  // The chapter the library and names are about: the open one, not a link being typed
+  const libraryUrl = openUrl || url;
+  const currentNovelSlug = libraryUrl ? extractNovelSlug(libraryUrl) : null;
 
   const currentNovelChapters = currentNovelSlug
     ? savedChapters.filter((c) => c.novelSlug === currentNovelSlug)
@@ -185,6 +209,7 @@ export default function Home() {
   useEffect(() => {
     setSavedChapters(getSavedChapters());
     setSettings(getSettings());
+    setNovelUpdates(getNovelUpdates());
 
     const currentUrl = getCurrentUrl();
     const shownAtStart = !!currentUrl && getSavedChapters().some((c) => c.url === currentUrl);
@@ -192,7 +217,7 @@ export default function Home() {
       const chapter = getSavedChapters().find((c) => c.url === currentUrl);
       if (chapter) {
         // Also records it as its novel's reading position (kept per novel since this was added)
-        setCurrentUrl(chapter.url);
+        markCurrent(chapter.url);
         setUrl(chapter.url);
         setOpenUrl(chapter.url);
         setTitle(chapter.title);
@@ -207,6 +232,7 @@ export default function Home() {
           const saved = getScrollPosition(currentUrl);
           if (saved) window.scrollTo(0, saved);
         }, 100);
+        refreshChapterLinks(chapter);
       } else {
         setUrl(currentUrl);
       }
@@ -255,6 +281,7 @@ export default function Home() {
 
       // After loading the chapter, which clears notices
       applySyncResult(result);
+      checkForNewChapters(false);
     });
 
     const handleVisible = () => {
@@ -347,17 +374,56 @@ export default function Home() {
     };
   }, []);
 
+  // The novels list shows new chapters: look for them when it is opened
+  useEffect(() => {
+    if (overlay === "library" && libraryTab === "novels") checkForNewChapters(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [overlay, libraryTab]);
+
+  // The chapter the reader is on; opening it marks its novel's new chapters seen
+  function markCurrent(chapterUrl: string) {
+    setCurrentUrl(chapterUrl);
+    setNovelUpdates(getNovelUpdates());
+  }
+
   function toggleOverlay(next: Overlay) {
     setOverlay((prev) => (prev === next ? "none" : next));
   }
 
+  // Asks the sites of the saved novels how many chapters they have now (those
+  // checked recently are skipped unless `force`)
+  async function checkForNewChapters(force: boolean) {
+    if (checkingUpdatesRef.current) return;
+    // A chapter of each novel, most recently saved novels first
+    const novels = new Map<string, string>();
+    for (const chapter of getSavedChapters()) {
+      if (!novels.has(chapter.novelSlug)) novels.set(chapter.novelSlug, getLastReadUrl(chapter.novelSlug) ?? chapter.url);
+    }
+    if (novels.size === 0) return;
+    checkingUpdatesRef.current = true;
+    setCheckingUpdates(true);
+    try {
+      const grown = await checkNovelUpdates([...novels.values()].slice(0, MAX_CHECKED_NOVELS), { force });
+      // The chapter being read may have been the latest: its Next button can light up now
+      const shown = getCurrentUrl();
+      const chapter = shown && grown.includes(extractNovelSlug(shown)) ? getSavedChapters().find((c) => c.url === shown) : null;
+      if (chapter) refreshChapterLinks(chapter);
+    } finally {
+      checkingUpdatesRef.current = false;
+      setCheckingUpdates(false);
+      setNovelUpdates(getNovelUpdates());
+    }
+  }
+
   function openLibrary(tab?: LibraryTab) {
+    // Opening a novel marked its new chapters as seen
+    setNovelUpdates(getNovelUpdates());
     if (tab) {
       setLibraryTab(tab);
       setOverlay("library");
       return;
     }
-    if (overlay !== "library") setLibraryTab(currentNovelChapters.length > 0 ? "chapters" : "novels");
+    if (overlay !== "library") setLibraryTab(openUrl || currentNovelChapters.length > 0 ? "chapters" : "novels");
     toggleOverlay("library");
   }
 
@@ -401,7 +467,7 @@ export default function Home() {
       // replace the one translating the chapter the reader moved on to
       const restart = () => (isShown() ? start() : Promise.resolve(null));
       // Before the request, so reopening the app finds this chapter even if it is closed right away
-      if (backgroundJobsMaybeAvailable()) setCurrentUrl(fetchUrl);
+      if (backgroundJobsMaybeAvailable()) markCurrent(fetchUrl);
       const jobId = await start();
       if (jobId) {
         return { chapter: await watchJobChapter(fetchUrl, jobId, signal, onMeta, onText, restart), fromJob: true };
@@ -486,7 +552,7 @@ export default function Home() {
       setTitle(savedTitle);
       setPrevUrl(chapter.prevUrl);
       setNextUrl(chapter.nextUrl);
-      setCurrentUrl(fetchUrl);
+      markCurrent(fetchUrl);
       return { nextUrl: chapter.nextUrl };
     } catch (e: unknown) {
       // Off screen, a failure is silent: the chapter is translated again when opened
@@ -610,32 +676,33 @@ export default function Home() {
     setPrevUrl(chapter.prevUrl || null);
     setNextUrl(chapter.nextUrl || null);
     setOverlay("none");
-    setCurrentUrl(chapter.url);
+    markCurrent(chapter.url);
     // Restore scroll position after content renders
     requestAnimationFrame(() => {
       const saved = getScrollPosition(chapter.url);
       window.scrollTo(0, saved);
     });
+    await refreshChapterLinks(chapter);
+  }
 
-    if (!chapter.prevUrl && !chapter.nextUrl) {
-      try {
-        const data = await fetchChapterContent(chapter.url);
-        // Only if the chapter still exists (it may have been deleted meanwhile)
-        const updated = await withStorageLock(() => {
-          const current = getSavedChapters().find((c) => c.url === chapter.url);
-          if (!current) return false;
-          saveChapter({ ...current, prevUrl: data.prevUrl, nextUrl: data.nextUrl });
-          return true;
-        });
-        if (!updated) return;
-        refreshSaved();
-        if (getCurrentUrl() === chapter.url) {
-          setPrevUrl(data.prevUrl);
-          setNextUrl(data.nextUrl);
-        }
-      } catch {
-        // Ignore
+  // A saved chapter with no next chapter was the latest when it was saved: look
+  // again, the site may have published the next one since
+  async function refreshChapterLinks(chapter: SavedChapter) {
+    if (chapter.nextUrl) return;
+    try {
+      const data = await fetchChapterContent(chapter.url);
+      const prev = data.prevUrl ?? chapter.prevUrl;
+      if (!data.nextUrl && prev === chapter.prevUrl) return;
+      // Only if the chapter still exists (it may have been deleted meanwhile)
+      const updated = await withStorageLock(() => updateChapterLinks(chapter.url, prev, data.nextUrl));
+      if (!updated) return;
+      refreshSaved();
+      if (openUrlRef.current === chapter.url) {
+        setPrevUrl(prev);
+        setNextUrl(data.nextUrl);
       }
+    } catch {
+      // Offline or the site is down: the link stays as it was
     }
   }
 
@@ -643,6 +710,11 @@ export default function Home() {
     if (autoModeRef.current) {
       stopAutoMode();
       abortRef.current?.abort();
+      // Also the chapters the server was translating ahead; the one it is on is finished and kept
+      const shown = getCurrentUrl() || url;
+      if (shown) acknowledgeJobChapters([], extractNovelSlug(shown));
+      // …and not asked for again when the app is next opened
+      clearPendingWindow();
       return;
     }
     if (!url.trim() || !getApiKeyForModel(settings)?.trim()) return;
@@ -775,6 +847,17 @@ export default function Home() {
     changeGlossary((terms) => editTerm(terms, termKey(term), term.target, change));
   }
 
+  // Downloads the open novel's saved chapters as an ebook or a text file, in
+  // the site's order when its chapter list was loaded, else following the links
+  function exportCurrentNovel(format: "epub" | "txt") {
+    if (currentNovelChapters.length === 0) return;
+    const name = currentNovelChapters.find((c) => c.novelName)?.novelName || novelName || currentNovelSlug || "";
+    const order = getCachedToc(currentNovelChapters[0].url)?.chapters.map((c) => c.url);
+    const chapters = orderNovelChapters(currentNovelChapters, order);
+    if (format === "epub") exportNovelEpub(name, chapters);
+    else exportNovelTxt(name, chapters);
+  }
+
   function handleTermDelete(term: GlossaryTerm) {
     changeGlossary((terms) => terms.filter((t) => termKey(t) !== termKey(term)));
   }
@@ -890,6 +973,9 @@ export default function Home() {
     return counts;
   }, [savedChapters]);
 
+  // A saved novel's site has chapters the reader has not seen yet
+  const hasNewChapters = Object.entries(novelUpdates).some(([slug, update]) => update.total > update.seen && libraryCounts.has(slug));
+
   // Finding a novel by name, or opening it from a link
   const startPanel = (autoFocus: boolean) => (
     <div className="flex flex-col gap-4">
@@ -976,6 +1062,7 @@ export default function Home() {
             active={overlay === "library"}
             textColor={textColor}
             showLabel
+            dot={hasNewChapters ? t.hasNewChapters : undefined}
           />
           <p className="flex-1 min-w-0 truncate text-center text-sm sm:text-base font-semibold px-1">
             {novelName || t.appTitle}
@@ -1183,7 +1270,7 @@ export default function Home() {
             <Tabs
               idPrefix="library"
               tabs={[
-                { id: "chapters", label: `${t.chapters} (${currentNovelChapters.length})` },
+                { id: "chapters", label: t.chapters },
                 { id: "names", label: `${t.names} (${glossary.length})` },
                 { id: "novels", label: t.novels },
               ]}
@@ -1195,14 +1282,70 @@ export default function Home() {
         >
           <TabPanel idPrefix="library" active={libraryTab}>
             {libraryTab === "chapters" ? (
-              <SavedChaptersList
-                chapters={currentNovelChapters}
-                settings={settings}
-                textColor={textColor}
-                currentUrl={url}
-                t={t}
-                onLoad={openSavedChapter}
-              />
+              <>
+                {libraryUrl && (
+                  <div className="flex gap-1 mb-3 p-1 rounded-lg" style={{ backgroundColor: textColor + "0d" }}>
+                    {(["toc", "saved"] as const).map((view) => (
+                      <button
+                        key={view}
+                        onClick={() => setChapterView(view)}
+                        aria-pressed={chapterView === view}
+                        className="flex-1 px-3 py-1.5 rounded-md text-sm font-medium cursor-pointer transition-colors"
+                        style={chapterView === view ? { backgroundColor: settings.bgColor, color: "#3b82f6" } : { color: textColor + "99" }}
+                      >
+                        {view === "toc" ? t.allChapters : `${t.savedChapters} (${currentNovelChapters.length})`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {libraryUrl && chapterView === "toc" ? (
+                  <ChapterDirectory
+                    novelUrl={libraryUrl}
+                    chapters={currentNovelChapters}
+                    currentUrl={openUrl || null}
+                    openaiApiKey={settings.openaiApiKey}
+                    canNavigate={canNavigate}
+                    textColor={textColor}
+                    bgColor={settings.bgColor}
+                    t={t}
+                    onOpen={(target) => {
+                      closeOverlay();
+                      openChapterLink(target);
+                    }}
+                  />
+                ) : (
+                  <>
+                    {currentNovelChapters.length > 0 && (
+                      <div className="flex items-center gap-2 mb-2 text-xs" style={{ color: textColor + "99" }}>
+                        <span>{t.exportNovel}:</span>
+                        {(["epub", "txt"] as const).map((format) => (
+                          <button
+                            key={format}
+                            onClick={() => exportCurrentNovel(format)}
+                            className="px-2 py-1 rounded-md border cursor-pointer hover:opacity-70"
+                            style={{ borderColor: textColor + "30", color: textColor }}
+                          >
+                            {format === "epub" ? t.exportEpub : t.exportTxt}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {currentNovelChapters.length >= MAX_CHAPTERS_PER_NOVEL && (
+                      <p className="mb-2 text-xs" style={{ color: textColor + "80" }}>
+                        {t.chapterCapNote.replace("{n}", String(MAX_CHAPTERS_PER_NOVEL))}
+                      </p>
+                    )}
+                  <SavedChaptersList
+                    chapters={currentNovelChapters}
+                    settings={settings}
+                    textColor={textColor}
+                    currentUrl={libraryUrl}
+                    t={t}
+                    onLoad={openSavedChapter}
+                  />
+                  </>
+                )}
+              </>
             ) : libraryTab === "names" ? (
               <GlossaryPanel
                 terms={glossary}
@@ -1227,6 +1370,9 @@ export default function Home() {
             ) : (
               <SavedNovelsList
                 chapters={savedChapters}
+                updates={novelUpdates}
+                checking={checkingUpdates}
+                onCheck={() => checkForNewChapters(true)}
                 textColor={textColor}
                 currentNovelSlug={currentNovelSlug}
                 t={t}
@@ -1264,7 +1410,19 @@ export default function Home() {
           <TabPanel idPrefix="settings" active={settingsTab}>
             {settingsTab === "ai" && <AISettingsPanel settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "speech" && <SpeechSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
-            {settingsTab === "general" && <GeneralSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
+            {settingsTab === "general" && (
+              <GeneralSettings
+                settings={settings}
+                textColor={textColor}
+                t={t}
+                onUpdate={updateSettings}
+                onRestored={() => {
+                  refreshSaved();
+                  setGlossaryVersion((v) => v + 1);
+                  checkForNewChapters(false);
+                }}
+              />
+            )}
             {settingsTab === "contact" && <ContactPanel textColor={textColor} />}
           </TabPanel>
         </Sheet>

@@ -13,11 +13,13 @@ const PENDING_WINDOW_KEY = "novel-translator-pending-window";
 const LAST_READ_KEY = "novel-translator-last-read";
 // Novels whose reading position is kept; the least recently read go first
 const MAX_LAST_READ = 200;
+// What the novels' sites listed when last checked, by novel slug (see NovelUpdate)
+const NOVEL_UPDATES_KEY = "novel-translator-novel-updates";
 // One key per novel: `${GLOSSARY_KEY_PREFIX}${novelSlug}`
 const GLOSSARY_KEY_PREFIX = "novel-translator-glossary:";
 const PENDING_WINDOW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_SCROLL_POSITIONS = 300;
-const MAX_CHAPTERS_PER_NOVEL = 100;
+export const MAX_CHAPTERS_PER_NOVEL = 100;
 const REMOVED_MODEL_NAMES = new Set([
   "gpt-4.1",
   "gpt-4.1-mini",
@@ -191,6 +193,8 @@ export function clearNovelChapters(novelSlug: string) {
   cleared.add(novelSlug);
   localStorage.setItem(CLEARED_NOVELS_KEY, JSON.stringify([...cleared]));
   localStorage.removeItem(GLOSSARY_KEY_PREFIX + novelSlug);
+  const { [novelSlug]: _update, ...updates } = getNovelUpdates();
+  localStorage.setItem(NOVEL_UPDATES_KEY, JSON.stringify(updates));
   const { [novelSlug]: _lastRead, ...lastRead } = getLastReadMap();
   localStorage.setItem(LAST_READ_KEY, JSON.stringify(lastRead));
   // Clear current URL if it belonged to this novel
@@ -222,7 +226,7 @@ export function getCurrentUrl(): string | null {
   return localStorage.getItem(CURRENT_KEY);
 }
 
-function getLastReadMap(): Record<string, string> {
+export function getLastReadMap(): Record<string, string> {
   try {
     const map = JSON.parse(localStorage.getItem(LAST_READ_KEY) || "{}");
     return map && typeof map === "object" && !Array.isArray(map) ? map : {};
@@ -245,6 +249,7 @@ export function setCurrentUrl(url: string) {
     const { [extractNovelSlug(url)]: _previous, ...others } = getLastReadMap();
     const entries = [...Object.entries(others), [extractNovelSlug(url), url]].slice(-MAX_LAST_READ);
     localStorage.setItem(LAST_READ_KEY, JSON.stringify(Object.fromEntries(entries)));
+    markNovelSeen(extractNovelSlug(url));
   } catch {
     // storage full; losing the resume position is harmless
   }
@@ -292,6 +297,15 @@ function shouldResetModel(model: unknown): boolean {
 
 export function saveSettings(settings: ReaderSettings) {
   localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+export function getScrollPositions(): Record<string, number> {
+  try {
+    const positions = JSON.parse(localStorage.getItem(SCROLL_KEY) || "{}");
+    return positions && typeof positions === "object" && !Array.isArray(positions) ? positions : {};
+  } catch {
+    return {};
+  }
 }
 
 export function getScrollPosition(url: string): number {
@@ -388,4 +402,99 @@ export function saveGlossary(novelSlug: string, terms: GlossaryTerm[]) {
   } catch (e) {
     throw isQuotaError(e) ? new StorageFullError() : e;
   }
+}
+
+// A novel's chapter count on its site when last checked, and when the reader
+// last opened it: the difference is how many chapters came out since
+export interface NovelUpdate {
+  total: number;
+  // The site's newest chapter
+  latestTitle: string;
+  checkedAt: number;
+  // `total` when the reader last opened the novel
+  seen: number;
+}
+
+export function getNovelUpdates(): Record<string, NovelUpdate> {
+  try {
+    const map = JSON.parse(localStorage.getItem(NOVEL_UPDATES_KEY) || "{}");
+    return map && typeof map === "object" && !Array.isArray(map) ? map : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveNovelUpdates(updates: Record<string, NovelUpdate>) {
+  try {
+    localStorage.setItem(NOVEL_UPDATES_KEY, JSON.stringify(updates));
+  } catch {
+    // storage full; only the new-chapter counts are lost
+  }
+}
+
+// Records what a novel's site lists now. The first check sets the baseline:
+// chapters already out then are not "new".
+export function recordNovelToc(novelSlug: string, total: number, latestTitle: string) {
+  // Deleted while its site was being asked
+  if (getClearedNovels().has(novelSlug)) return;
+  const updates = getNovelUpdates();
+  const previous = updates[novelSlug];
+  updates[novelSlug] = { total, latestTitle, checkedAt: Date.now(), seen: previous ? Math.min(previous.seen, total) : total };
+  saveNovelUpdates(updates);
+}
+
+// The reader opened the novel: its new chapters are no longer new
+export function markNovelSeen(novelSlug: string) {
+  const updates = getNovelUpdates();
+  const update = updates[novelSlug];
+  if (!update || update.seen === update.total) return;
+  updates[novelSlug] = { ...update, seen: update.total };
+  saveNovelUpdates(updates);
+}
+
+// Novels that have a glossary saved
+export function getGlossaryNovels(): string[] {
+  const slugs: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(GLOSSARY_KEY_PREFIX)) slugs.push(key.slice(GLOSSARY_KEY_PREFIX.length));
+  }
+  return slugs;
+}
+
+// Restoring a backup: the merged chapters (newest first) and reading positions
+// are written in one go each. Each novel keeps its most recent chapters, as
+// when saving one. Reading positions the device has already win. Returns the
+// chapters kept; throws StorageFullError (nothing written) when they do not fit.
+export function restoreLibrary(chapters: SavedChapter[], lastRead: Record<string, string>, scroll: Record<string, number>): SavedChapter[] {
+  for (const slug of new Set(chapters.map((c) => c.novelSlug))) chapters = limitNovelChapters(chapters, slug);
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
+  } catch (e) {
+    throw isQuotaError(e) ? new StorageFullError() : e;
+  }
+  try {
+    localStorage.setItem(LAST_READ_KEY, JSON.stringify({ ...lastRead, ...getLastReadMap() }));
+    localStorage.setItem(SCROLL_KEY, JSON.stringify({ ...scroll, ...getScrollPositions() }));
+  } catch {
+    // storage full; only reading positions are lost
+  }
+  return chapters;
+}
+
+// Sets a saved chapter's links to the chapters around it, changing nothing
+// else (no chapter is removed, unlike saveChapter). False if it is not saved.
+export function updateChapterLinks(url: string, prevUrl: string | null, nextUrl: string | null): boolean {
+  const chapters = getSavedChapters();
+  const chapter = chapters.find((c) => c.url === url);
+  if (!chapter) return false;
+  chapter.prevUrl = prevUrl;
+  chapter.nextUrl = nextUrl;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
+  } catch {
+    // storage full: the links are found again next time
+    return false;
+  }
+  return true;
 }

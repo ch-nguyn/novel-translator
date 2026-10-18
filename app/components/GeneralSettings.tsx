@@ -4,15 +4,17 @@ import { ReaderSettings } from "../lib/types";
 import { Translations } from "../lib/i18n";
 import DisplaySettings from "./DisplaySettings";
 import Switch from "./Switch";
+import BackupSettings from "./BackupSettings";
 
 interface Props {
   settings: ReaderSettings;
   textColor: string;
   t: Translations;
   onUpdate: (patch: Partial<ReaderSettings>) => void;
+  onRestored: () => void;
 }
 
-export default function GeneralSettings({ settings, textColor, t, onUpdate }: Props) {
+export default function GeneralSettings({ settings, textColor, t, onUpdate, onRestored }: Props) {
   return (
     <div className="flex flex-col gap-5">
       <div>
@@ -38,6 +40,10 @@ export default function GeneralSettings({ settings, textColor, t, onUpdate }: Pr
       <div className="border-t pt-5" style={{ borderColor: textColor + "15" }}>
         <p className="text-sm font-semibold mb-4">{t.display}</p>
         <DisplaySettings settings={settings} textColor={textColor} t={t} onUpdate={onUpdate} />
+      </div>
+
+      <div className="border-t pt-5" style={{ borderColor: textColor + "15" }}>
+        <BackupSettings textColor={textColor} t={t} onRestored={onRestored} />
       </div>
     </div>
   );

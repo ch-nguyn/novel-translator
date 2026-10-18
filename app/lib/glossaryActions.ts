@@ -2,6 +2,7 @@ import { GlossaryTerm, TranslateOptions } from "./types";
 import { importTerms, makeNameFixer, mergeTerms, sanitizeTerms } from "./glossary";
 import { getClearedNovels, getGlossary, getSavedChapters, rewriteNovelChapters, saveGlossary, withStorageLock } from "./storage";
 import { extractChapterTerms, fetchChapterContent } from "./api";
+import { downloadBlob, safeFilename } from "./exportNovel";
 
 // What the user does with a novel's glossary (app/lib/glossary.ts) in the
 // browser: correct names, scan saved chapters, export and import it.
@@ -69,11 +70,7 @@ const FILE_FORMAT = "novel-translator-glossary";
 export function exportGlossary(novelSlug: string, novelName: string) {
   const terms = getGlossary(novelSlug).map(({ firstSeen: _firstSeen, edited: _edited, ...term }) => term);
   const file = JSON.stringify({ format: FILE_FORMAT, version: 1, novel: novelName, terms }, null, 2);
-  const link = document.createElement("a");
-  link.href = URL.createObjectURL(new Blob([file], { type: "application/json" }));
-  link.download = `${(novelName || novelSlug).replace(/[\\/:*?"<>|]+/g, " ").trim()} - names.json`;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  downloadBlob(new Blob([file], { type: "application/json" }), `${safeFilename(novelName || novelSlug)} - names.json`);
 }
 
 // Merges an exported glossary file into the novel's; its names win over the
