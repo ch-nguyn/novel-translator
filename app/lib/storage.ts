@@ -1,4 +1,4 @@
-import { DEFAULT_AI_MODEL, GlossaryTerm, SavedChapter, ReaderSettings } from "./types";
+import { AI_VOICES, DEFAULT_AI_MODEL, DEFAULT_AI_VOICE, GlossaryTerm, SavedChapter, ReaderSettings, SPEECH_RATES } from "./types";
 import { findSite } from "./sites";
 import { MAX_STORED_TERMS, sanitizeTerms } from "./glossary";
 
@@ -36,6 +36,10 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   autoClearNovels: false,
   reasoningEffort: "medium",
   autoGlossary: true,
+  speechEngine: "device",
+  speechVoice: "",
+  speechAiVoice: DEFAULT_AI_VOICE,
+  speechRate: 1,
 };
 
 // Groups chapters by novel (e.g. biquuge.com/0/229/245181.html → biquuge-229)
@@ -242,6 +246,10 @@ export function getSettings(): ReaderSettings {
       settings.reasoningEffort = "low";
     }
     delete (settings as Record<string, unknown>).apiKey;
+    if (settings.speechEngine !== "device" && settings.speechEngine !== "ai") settings.speechEngine = "device";
+    if (!AI_VOICES.includes(settings.speechAiVoice)) settings.speechAiVoice = DEFAULT_AI_VOICE;
+    if (!SPEECH_RATES.includes(settings.speechRate)) settings.speechRate = 1;
+    if (typeof settings.speechVoice !== "string") settings.speechVoice = "";
     return settings;
   } catch {
     return DEFAULT_SETTINGS;

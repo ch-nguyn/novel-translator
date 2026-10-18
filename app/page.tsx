@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import { DEFAULT_AI_MODEL, GlossaryTerm, SavedChapter, ReaderSettings, TranslatedChapter, TranslateOptions, getTextColor, getApiKeyForModel, getTranslateOptions } from "./lib/types";
+import { Fragment, useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { DEFAULT_AI_MODEL, DEFAULT_AI_VOICE, GlossaryTerm, SavedChapter, ReaderSettings, TranslatedChapter, TranslateOptions, getTextColor, getApiKeyForModel, getTranslateOptions } from "./lib/types";
 import {
   getSavedChapters,
   saveChapter,
@@ -49,16 +49,19 @@ import NavButtons from "./components/NavButtons";
 import ContactPanel from "./components/ContactPanel";
 import GlossaryPanel, { TermChange } from "./components/GlossaryPanel";
 import RenameDialog from "./components/RenameDialog";
+import SpeechPlayer from "./components/SpeechPlayer";
+import SpeechSettings from "./components/SpeechSettings";
+import { SpeechError, useSpeech } from "./lib/useSpeech";
 import Sheet, { TabPanel, Tabs } from "./components/Sheet";
 import Popover from "./components/Popover";
-import { ListIcon, PlusIcon, SettingsIcon, TypeIcon } from "./components/Icons";
+import { HeadphonesIcon, ListIcon, PlusIcon, SettingsIcon, TypeIcon } from "./components/Icons";
 import { getTranslations } from "./lib/i18n";
 
 // What is open over the page: the chapter/novel lists, the settings, or a
 // header dropdown (new novel link, display options)
 type Overlay = "none" | "library" | "settings" | "new" | "display";
 type LibraryTab = "chapters" | "names" | "novels";
-type SettingsTab = "ai" | "general" | "contact";
+type SettingsTab = "ai" | "speech" | "general" | "contact";
 
 function HeaderButton({
   label,
@@ -99,7 +102,10 @@ type Notice =
   | { kind: "storageFull" };
 
 export default function Home() {
+  // The link in the form (also the open chapter's, until another is typed)
   const [url, setUrl] = useState("");
+  // The chapter shown (or being opened); empty when none is
+  const [openUrl, setOpenUrl] = useState("");
   const [simplifiedText, setSimplifiedText] = useState("");
   const [fetching, setFetching] = useState(false);
   const [simplifying, setSimplifying] = useState(false);
@@ -127,6 +133,10 @@ export default function Home() {
     autoClearNovels: false,
     reasoningEffort: "medium",
     autoGlossary: true,
+    speechEngine: "device",
+    speechVoice: "",
+    speechAiVoice: DEFAULT_AI_VOICE,
+    speechRate: 1,
   });
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [autoTranslating, setAutoTranslating] = useState(false);
@@ -170,6 +180,7 @@ export default function Home() {
       const chapter = getSavedChapters().find((c) => c.url === currentUrl);
       if (chapter) {
         setUrl(chapter.url);
+        setOpenUrl(chapter.url);
         setTitle(chapter.title);
         setNovelName(chapter.novelName || "");
         setChapterName(chapter.title || "");
@@ -400,6 +411,7 @@ export default function Home() {
     setPrevUrl(null);
     setNextUrl(null);
     setUrl(fetchUrl);
+    setOpenUrl(fetchUrl);
     window.scrollTo(0, 0);
 
     const onMeta = (meta: ChapterMeta) => {
@@ -521,6 +533,7 @@ export default function Home() {
   async function loadSavedChapter(chapter: SavedChapter) {
     setNotice(null);
     setUrl(chapter.url);
+    setOpenUrl(chapter.url);
     setTitle(chapter.title);
     setNovelName(chapter.novelName || "");
     setChapterName(chapter.title || "");
@@ -611,6 +624,7 @@ export default function Home() {
       setNovelName("");
       setChapterName("");
       setUrl("");
+      setOpenUrl("");
       setPrevUrl(null);
       setNextUrl(null);
     }
@@ -707,6 +721,54 @@ export default function Home() {
   const textColor = getTextColor(settings.bgColor);
   // Nothing opened yet (or the novel was deleted): the link form is the page
   const nothingOpen = !simplifiedText && !title && !novelName && !chapterName && !isLoading;
+  const paragraphs = useMemo(() => simplifiedText.split("\n"), [simplifiedText]);
+
+  const speechErrors: Record<SpeechError, string> = {
+    unsupported: t.speechUnsupported,
+    noVoice: t.noVietnameseVoice,
+    needKey: t.speechNeedKey,
+    badKey: t.speechBadKey,
+    rateLimited: t.speechRateLimited,
+    failed: t.speechFailed,
+  };
+  const speech = useSpeech({
+    chapterKey: nothingOpen ? "" : openUrl,
+    text: simplifiedText,
+    loading: isLoading,
+    engine: settings.speechEngine,
+    deviceVoice: settings.speechVoice,
+    aiVoice: settings.speechAiVoice,
+    rate: settings.speechRate,
+    openaiApiKey: settings.openaiApiKey,
+    title: chapterName || title,
+    novelName,
+    firstVisibleParagraph,
+    onChapterEnd: () => {
+      if (!nextUrl || !canNavigate(nextUrl)) return false;
+      navigateToChapter(nextUrl);
+      return true;
+    },
+    onError: (error) => setNotice({ kind: "error", message: speechErrors[error] }),
+  });
+  const reading = speech.status !== "off";
+
+  // The paragraph at the top of the screen, where reading aloud starts
+  function firstVisibleParagraph(): number {
+    const lines = Array.from(textRef.current?.querySelectorAll<HTMLElement>("[data-p]") ?? []);
+    const top = lines.find((line) => line.getBoundingClientRect().bottom > 64);
+    return top ? Number(top.dataset.p) : 0;
+  }
+
+  // Keeps the paragraph being read on screen
+  useEffect(() => {
+    if (speech.paragraph === null || document.visibilityState !== "visible") return;
+    const line = textRef.current?.querySelector<HTMLElement>(`[data-p="${speech.paragraph}"]`);
+    if (!line) return;
+    const rect = line.getBoundingClientRect();
+    if (rect.top < 64 || rect.top > window.innerHeight - 160) {
+      window.scrollTo({ top: window.scrollY + rect.top - 80, behavior: "smooth" });
+    }
+  }, [speech.paragraph]);
 
   const linkForm = (autoFocus: boolean) => (
     <LinkForm
@@ -787,6 +849,15 @@ export default function Home() {
             textColor={textColor}
             showLabel
           />
+          {!nothingOpen && (
+            <HeaderButton
+              label={reading ? t.stopReading : t.readAloud}
+              icon={<HeadphonesIcon />}
+              onClick={() => (reading ? speech.stop() : speech.start())}
+              active={reading}
+              textColor={textColor}
+            />
+          )}
           <HeaderButton
             label={t.display}
             icon={<TypeIcon />}
@@ -815,7 +886,7 @@ export default function Home() {
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+      <div className={"max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6" + (reading ? " pb-32" : "")}>
         {nothingOpen ? (
           <section className="max-w-xl mx-auto py-6 sm:py-12">
             <h1 className="text-xl sm:text-2xl font-semibold text-center mb-6">{t.emptyTitle}</h1>
@@ -854,8 +925,27 @@ export default function Home() {
               ref={textRef}
               className="min-h-[60vh] px-1 sm:px-2 py-4 whitespace-pre-wrap"
               style={{ fontSize: `${settings.fontSize}px`, lineHeight: settings.lineSpacing }}
+              onClick={(e) => {
+                // While reading aloud, a tapped paragraph is read from its start
+                if (!reading || !document.getSelection()?.isCollapsed) return;
+                const line = (e.target as HTMLElement).closest<HTMLElement>("[data-p]");
+                if (line) speech.seekParagraph(Number(line.dataset.p));
+              }}
             >
-              {simplifiedText || (
+              {simplifiedText ? (
+                paragraphs.map((line, i) => (
+                  <Fragment key={i}>
+                    <span
+                      data-p={i}
+                      className={speech.paragraph === i ? "rounded-sm" : undefined}
+                      style={speech.paragraph === i ? { backgroundColor: "#3b82f630", boxDecorationBreak: "clone", WebkitBoxDecorationBreak: "clone" } : undefined}
+                    >
+                      {line}
+                    </span>
+                    {i < paragraphs.length - 1 && "\n"}
+                  </Fragment>
+                ))
+              ) : (
                 <span className={isLoading ? "animate-pulse" : undefined} style={{ color: textColor + "60" }}>
                   {isLoading ? buttonLabel : t.contentPlaceholder}
                 </span>
@@ -870,7 +960,7 @@ export default function Home() {
       {autoTranslating && (
         <button
           onClick={toggleAutoTranslate}
-          className="fixed bottom-6 left-6 h-12 px-4 rounded-full shadow-lg flex items-center gap-2 cursor-pointer z-30 text-sm font-medium transition-all hover:scale-105"
+          className={"fixed left-6 h-12 px-4 rounded-full shadow-lg flex items-center gap-2 cursor-pointer z-30 text-sm font-medium transition-all hover:scale-105" + (reading ? " bottom-32" : " bottom-6")}
           style={{ backgroundColor: "#dc2626", color: "#ffffff" }}
           aria-label={t.pause}
         >
@@ -882,7 +972,7 @@ export default function Home() {
       {showScrollTop && (
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="fixed bottom-6 right-6 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 cursor-pointer z-30"
+          className={"fixed right-6 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 cursor-pointer z-30" + (reading ? " bottom-32" : " bottom-6")}
           style={{
             backgroundColor: textColor + "20",
             color: textColor,
@@ -895,6 +985,25 @@ export default function Home() {
             <path d="M18 15l-6-6-6 6" />
           </svg>
         </button>
+      )}
+      {reading && (
+        <SpeechPlayer
+          status={speech.status}
+          position={speech.position}
+          total={speech.total}
+          rate={settings.speechRate}
+          sleep={speech.sleep}
+          sleepLeft={speech.sleepLeft}
+          textColor={textColor}
+          bgColor={settings.bgColor}
+          t={t}
+          onToggle={speech.toggle}
+          onSkip={speech.skip}
+          onStop={speech.stop}
+          onRate={(speechRate) => updateSettings({ speechRate })}
+          onSleep={speech.setSleep}
+          onSettings={() => openSettings("speech")}
+        />
       )}
       {settings.autoGlossary && selectedName && !isLoading && overlay === "none" && !renameFrom && currentNovelSlug && (
         <button
@@ -1003,6 +1112,7 @@ export default function Home() {
               idPrefix="settings"
               tabs={[
                 { id: "ai", label: t.aiSettings },
+                { id: "speech", label: t.readAloud },
                 { id: "general", label: t.general },
                 { id: "contact", label: t.contact },
               ]}
@@ -1014,6 +1124,7 @@ export default function Home() {
         >
           <TabPanel idPrefix="settings" active={settingsTab}>
             {settingsTab === "ai" && <AISettingsPanel settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
+            {settingsTab === "speech" && <SpeechSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "general" && <GeneralSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "contact" && <ContactPanel textColor={textColor} />}
           </TabPanel>

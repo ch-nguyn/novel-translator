@@ -53,7 +53,20 @@ export interface ReaderSettings {
   reasoningEffort: ReasoningEffort;
   // Remember the novel's names and translate them the same way in every chapter
   autoGlossary: boolean;
+  // Reading aloud: the device's own voices, or OpenAI's (with the OpenAI key)
+  speechEngine: SpeechEngine;
+  // voiceURI of the device voice; empty for its first Vietnamese one
+  speechVoice: string;
+  speechAiVoice: string;
+  speechRate: number;
 }
+
+export type SpeechEngine = "device" | "ai";
+
+// OpenAI's voices (gpt-4o-mini-tts), best first
+export const AI_VOICES = ["marin", "cedar", "coral", "nova", "shimmer", "sage", "alloy", "ash", "ballad", "echo", "fable", "onyx", "verse"];
+export const DEFAULT_AI_VOICE = "marin";
+export const SPEECH_RATES = [0.8, 1, 1.2, 1.4, 1.6, 1.8, 2];
 
 export function getProviderForModel(model: string): AIProvider {
   if (model.startsWith("gemini")) return "gemini";

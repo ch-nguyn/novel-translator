@@ -51,3 +51,52 @@ export function CloseIcon() {
     </svg>
   );
 }
+
+export function HeadphonesIcon() {
+  return (
+    <svg {...base}>
+      <path d="M3 14h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7a9 9 0 0 1 18 0v7a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3" />
+    </svg>
+  );
+}
+
+export function PlayIcon() {
+  return (
+    <svg {...base} fill="currentColor">
+      <path d="M7 4.5v15l12-7.5z" />
+    </svg>
+  );
+}
+
+export function PauseIcon() {
+  return (
+    <svg {...base} fill="currentColor">
+      <path d="M7 4h3.5v16H7zM13.5 4H17v16h-3.5z" />
+    </svg>
+  );
+}
+
+export function SkipBackIcon() {
+  return (
+    <svg {...base}>
+      <path d="M19 20 9 12l10-8zM5 19V5" />
+    </svg>
+  );
+}
+
+export function SkipForwardIcon() {
+  return (
+    <svg {...base}>
+      <path d="m5 4 10 8-10 8zM19 5v14" />
+    </svg>
+  );
+}
+
+export function TimerIcon() {
+  return (
+    <svg {...base}>
+      <path d="M10 2h4M12 14l3-3" />
+      <circle cx="12" cy="14" r="8" />
+    </svg>
+  );
+}
