@@ -24,11 +24,9 @@ export const AI_MODEL_OPTIONS: AIModelOption[] = [
     provider: "openai",
     label: "OpenAI",
     models: [
-      "gpt-5.4",
-      "gpt-5.4-mini",
-      "gpt-5.4-nano",
       "gpt-5.6-luna",
       "gpt-5.6-sol",
+      "gpt-6-luna",
       "gpt-6.1-sol",
     ],
   },

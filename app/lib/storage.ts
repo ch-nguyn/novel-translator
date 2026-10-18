@@ -26,6 +26,9 @@ const REMOVED_MODEL_NAMES = new Set([
   "gpt-4.1-nano",
   "gpt-4o",
   "gpt-4o-mini",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
 ]);
 
 const DEFAULT_SETTINGS: ReaderSettings = {

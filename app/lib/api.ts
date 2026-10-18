@@ -7,9 +7,6 @@ import { SearchCandidate, SearchErrorCode, SearchResponse } from "./search";
 // Pricing per million tokens: [input, output] in USD
 // Models not listed here have unknown pricing
 const MODEL_PRICING: Record<string, [number, number]> = {
-  "gpt-5.4": [2.00, 8.00],
-  "gpt-5.4-mini": [0.40, 1.60],
-  "gpt-5.4-nano": [0.10, 0.40],
   "gpt-4.1": [2.00, 8.00],
   "gpt-4.1-mini": [0.40, 1.60],
   "gpt-4.1-nano": [0.10, 0.40],
