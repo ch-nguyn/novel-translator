@@ -29,6 +29,8 @@ interface CompleteParams {
   maxTokens: number;
   // What the call is for, in error logs
   task: string;
+  // OpenAI reasoning models: "none" for quick lookups that need no thinking
+  reasoningEffort?: "none" | "low";
 }
 
 // The failed call is otherwise invisible to the user; log why
@@ -55,16 +57,23 @@ function responsesOutputText(data: {
 
 // The model's answer, trimmed; empty if it gave none. Throws ModelCallError
 // when the provider rejects the request.
-export async function complete({ apiKey, model, system, input, maxTokens, task }: CompleteParams): Promise<string> {
+export async function complete({ apiKey, model, system, input, maxTokens, task, reasoningEffort = "low" }: CompleteParams): Promise<string> {
   const provider = getProvider(model);
 
   // Reasoning models (GPT-5+, o-series) reject a custom temperature on Chat Completions
   if (isOpenAIReasoningModel(model)) {
-    const res = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({ model, instructions: system, input, reasoning: { effort: "low" } }),
-    });
+    const call = (effort: string) =>
+      fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({ model, instructions: system, input, reasoning: { effort } }),
+      });
+    let res = await call(reasoningEffort);
+    // Models that must reason a little reject "none"
+    if (res.status === 400 && reasoningEffort === "none") {
+      console.error(`[${task}] ${model} rejected reasoning effort "none": ${(await res.text().catch(() => "")).slice(0, 200)}`);
+      res = await call("low");
+    }
     if (!res.ok) return fail(task, "OpenAI", res);
     return responsesOutputText(await res.json()).trim();
   }

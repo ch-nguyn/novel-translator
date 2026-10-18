@@ -2,9 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Translations } from "../lib/i18n";
-import { FoundNovel, SearchCandidate, SearchErrorCode, SearchResponse } from "../lib/search";
-import { searchNovels, SearchError, translateTitles } from "../lib/api";
+import { FoundNovel, queryKey, SearchCandidate, SearchErrorCode, SearchResponse, SiteResults } from "../lib/search";
+import { searchNovels, SearchError } from "../lib/api";
 import { extractNovelSlug } from "../lib/storage";
+import { NOVEL_SITES } from "../lib/sites";
 import { SearchIcon } from "./Icons";
 
 interface SearchState {
@@ -13,21 +14,53 @@ interface SearchState {
   candidates: SearchCandidate[];
   picked: number;
   response: SearchResponse | null;
-  // Titles and authors in Sino-Vietnamese, by their Chinese text
-  names: Record<string, string>;
   error: SearchErrorCode | "failed" | null;
 }
 
-const EMPTY: SearchState = { query: "", candidates: [], picked: 0, response: null, names: {}, error: null };
+const EMPTY: SearchState = { query: "", candidates: [], picked: 0, response: null, error: null };
 
 // The last search, shown again when the panel is reopened (for this visit only)
 let lastSearch: SearchState = EMPTY;
 
+// Recent searches, so searching the same name again is instant and free
+const CACHE_KEY = "novel-translator-search-cache";
+const CACHE_TTL_MS = 30 * 60_000;
+const CACHE_SIZE = 20;
+
+type CachedSearches = Record<string, { at: number; response: SearchResponse }>;
+
+function readCache(): CachedSearches {
+  try {
+    const cache = JSON.parse(localStorage.getItem(CACHE_KEY) || "{}");
+    return cache && typeof cache === "object" ? cache : {};
+  } catch {
+    return {};
+  }
+}
+
+function cachedSearch(key: string): SearchResponse | null {
+  const entry = readCache()[key];
+  return entry && Date.now() - entry.at < CACHE_TTL_MS && Array.isArray(entry.response?.sites) ? entry.response : null;
+}
+
+function cacheSearch(key: string, response: SearchResponse) {
+  const fresh = Object.entries(readCache()).filter(([k, entry]) => k !== key && Date.now() - entry.at < CACHE_TTL_MS);
+  const kept = fresh.sort((a, b) => b[1].at - a[1].at).slice(0, CACHE_SIZE - 1);
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(Object.fromEntries([[key, { at: Date.now(), response }], ...kept])));
+  } catch {
+    // Storage full: chapters matter more than this cache
+  }
+}
+
+// A site's first results; the rest behind "show more"
+const SHOWN_PER_SITE = 5;
+
 interface Props {
   t: Translations;
   textColor: string;
+  // The OpenAI key: searching uses a fixed OpenAI model (see SEARCH_AI_MODEL)
   apiKey: string;
-  model: string;
   // Saved chapters per novel slug: those novels open where the reader left off
   library: Map<string, number>;
   autoFocus?: boolean;
@@ -35,9 +68,11 @@ interface Props {
 }
 
 // Finding a novel on the supported sites by its name, in Vietnamese or Chinese
-export default function NovelSearch({ t, textColor, apiKey, model, library, autoFocus, onOpen }: Props) {
+export default function NovelSearch({ t, textColor, apiKey, library, autoFocus, onOpen }: Props) {
   const [state, setState] = useState<SearchState>(lastSearch);
   const [searching, setSearching] = useState(false);
+  // Sites whose every result is shown
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -53,39 +88,35 @@ export default function NovelSearch({ t, textColor, apiKey, model, library, auto
     const controller = new AbortController();
     abortRef.current = controller;
     const candidate = picked === undefined ? undefined : state.candidates[picked];
-    setSearching(true);
-    setState((s) => ({ ...s, response: null, error: null, ...(picked === undefined ? { candidates: [], picked: 0, names: {} } : { picked }) }));
-    try {
-      const response = await searchNovels({ query, candidate, apiKey, model }, controller.signal);
-      if (controller.signal.aborted) return;
-      setState((s) => ({ ...s, response, ...(picked === undefined ? { candidates: response.candidates } : {}) }));
+    // A picked guess by all it searches with: the same title by another author is another search
+    const key = candidate ? `zh:${JSON.stringify(candidate)}` : `q:${queryKey(query)}`;
+    const fresh = picked === undefined ? { candidates: [], picked: 0 } : { picked };
+    setExpanded(new Set());
+
+    const cached = cachedSearch(key);
+    if (cached) {
       setSearching(false);
-      translateNames(response, controller.signal);
+      setState((s) => ({ ...s, ...fresh, response: cached, error: null, ...(picked === undefined ? { candidates: cached.candidates } : {}) }));
+      return;
+    }
+    setSearching(true);
+    setState((s) => ({ ...s, ...fresh, response: null, error: null }));
+    try {
+      const response = await searchNovels({ query, candidate, apiKey }, controller.signal);
+      if (controller.signal.aborted) return;
+      // Not when a site failed or a name is untranslated (no key, AI error): better next time
+      const complete = response.sites.every((site) => !site.failed && site.results.every((novel) => novel.titleVi && (novel.authorVi || !novel.author)));
+      if (complete) cacheSearch(key, response);
+      setState((s) => ({ ...s, response, ...(picked === undefined ? { candidates: response.candidates } : {}) }));
     } catch (e) {
       if (controller.signal.aborted) return;
       setState((s) => ({ ...s, error: e instanceof SearchError && e.code ? e.code : "failed" }));
-      setSearching(false);
     }
-  }
-
-  // The results' titles and authors in Sino-Vietnamese, after they are shown
-  async function translateNames(response: SearchResponse, signal: AbortSignal) {
-    if (!apiKey.trim()) return;
-    const texts = [...new Set(response.results.flatMap((novel) => [novel.title, novel.author]).filter(Boolean))];
-    if (texts.length === 0) return;
-    const translated = await translateTitles(texts, apiKey, model);
-    if (signal.aborted) return;
-    const names: Record<string, string> = {};
-    texts.forEach((text, i) => {
-      const name = translated[i]?.trim();
-      // Left untranslated when the call failed
-      if (name && name !== text) names[text] = name;
-    });
-    setState((s) => ({ ...s, names: { ...s.names, ...names } }));
+    setSearching(false);
   }
 
   const muted = textColor + "80";
-  const { response, candidates, picked, names, error } = state;
+  const { response, candidates, picked, error } = state;
   const errors: Record<SearchErrorCode | "failed", string> = {
     needKey: t.searchNeedKey,
     badKey: t.searchBadKey,
@@ -95,6 +126,80 @@ export default function NovelSearch({ t, textColor, apiKey, model, library, auto
   };
   const guess = candidates[picked];
   const others = candidates.map((c, i) => ({ c, i })).filter(({ i }) => i !== picked);
+  const nothingFound = !!response && response.sites.every((site) => !site.failed && site.results.length === 0);
+
+  function siteSection({ site, results, failed }: SiteResults) {
+    const label = NOVEL_SITES.find((s) => s.domain === site)?.label;
+    const shown = expanded.has(site) ? results : results.slice(0, SHOWN_PER_SITE);
+    return (
+      <section key={site} aria-label={site} className="flex flex-col gap-1.5">
+        <h3 className="flex items-center gap-2 text-xs font-medium" style={{ color: textColor + "b0" }}>
+          {site}
+          {label && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded font-mono" style={{ backgroundColor: textColor + "15", color: textColor + "90" }}>
+              {label}
+            </span>
+          )}
+          {!failed && <span style={{ color: muted }}>· {t.searchCount.replace("{n}", String(results.length))}</span>}
+        </h3>
+        {failed ? (
+          <p className="text-xs px-3 py-2 rounded-lg border" style={{ color: "#d97706", borderColor: textColor + "20" }}>
+            {t.searchSiteFailed}
+          </p>
+        ) : results.length === 0 ? (
+          <p className="text-xs px-3 py-2 rounded-lg border" style={{ color: muted, borderColor: textColor + "20" }}>
+            {t.searchSiteEmpty}
+          </p>
+        ) : (
+          <ul className="flex flex-col rounded-lg border divide-y" style={{ borderColor: textColor + "20" }}>
+            {shown.map((novel) => {
+              const saved = library.get(extractNovelSlug(novel.url)) ?? 0;
+              const details = [
+                novel.authorVi || novel.author,
+                novel.status === "completed" ? t.statusCompleted : novel.status === "ongoing" ? t.statusOngoing : "",
+              ].filter(Boolean);
+              return (
+                <li key={novel.url} style={{ borderColor: textColor + "15" }}>
+                  <button
+                    onClick={() => onOpen(novel)}
+                    className="w-full text-left px-3 py-2.5 cursor-pointer hover:opacity-70 transition-opacity"
+                  >
+                    <span className="flex items-baseline gap-2">
+                      <span className="text-sm font-medium truncate">{novel.titleVi || novel.title}</span>
+                      {novel.titleVi && (
+                        <span lang="zh" className="text-xs truncate shrink-0 max-w-[40%]" style={{ color: muted }}>
+                          {novel.title}
+                        </span>
+                      )}
+                    </span>
+                    <span className="flex items-center gap-2 mt-0.5 text-xs" style={{ color: muted }}>
+                      <span className="truncate">{details.join(" · ")}</span>
+                      {saved > 0 && (
+                        <span className="shrink-0 px-1.5 py-0.5 rounded" style={{ backgroundColor: "#3b82f620", color: "#3b82f6" }}>
+                          {t.inLibrary.replace("{n}", String(saved))}
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+            {results.length > shown.length && (
+              <li style={{ borderColor: textColor + "15" }}>
+                <button
+                  onClick={() => setExpanded((sites) => new Set(sites).add(site))}
+                  className="w-full px-3 py-2 text-xs cursor-pointer hover:opacity-70"
+                  style={{ color: "#3b82f6" }}
+                >
+                  {t.searchShowMore.replace("{n}", String(results.length - shown.length))}
+                </button>
+              </li>
+            )}
+          </ul>
+        )}
+      </section>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3">
@@ -162,56 +267,14 @@ export default function NovelSearch({ t, textColor, apiKey, model, library, auto
             )}
           </p>
         )}
-        {response && !searching && response.failedSites.length > 0 && (
-          <p className="text-xs" style={{ color: "#d97706" }}>
-            {t.searchSitesFailed.replace("{sites}", response.failedSites.join(", "))}
-          </p>
-        )}
-        {response && !searching && response.results.length === 0 && (
+        {nothingFound && !searching && (
           <p className="text-sm" style={{ color: muted }}>
             {t.searchNoResults}
           </p>
         )}
       </div>
 
-      {response && !searching && response.results.length > 0 && (
-        <ul className="flex flex-col rounded-lg border divide-y" style={{ borderColor: textColor + "20" }}>
-          {response.results.map((novel) => {
-            const saved = library.get(extractNovelSlug(novel.url)) ?? 0;
-            const name = names[novel.title];
-            const details = [
-              names[novel.author] || novel.author,
-              novel.status === "completed" ? t.statusCompleted : novel.status === "ongoing" ? t.statusOngoing : "",
-              novel.site,
-            ].filter(Boolean);
-            return (
-              <li key={novel.url} style={{ borderColor: textColor + "15" }}>
-                <button
-                  onClick={() => onOpen(novel)}
-                  className="w-full text-left px-3 py-2.5 cursor-pointer hover:opacity-70 transition-opacity"
-                >
-                  <span className="flex items-baseline gap-2">
-                    <span className="text-sm font-medium truncate">{name || novel.title}</span>
-                    {name && (
-                      <span lang="zh" className="text-xs truncate shrink-0 max-w-[40%]" style={{ color: muted }}>
-                        {novel.title}
-                      </span>
-                    )}
-                  </span>
-                  <span className="flex items-center gap-2 mt-0.5 text-xs" style={{ color: muted }}>
-                    <span className="truncate">{details.join(" · ")}</span>
-                    {saved > 0 && (
-                      <span className="shrink-0 px-1.5 py-0.5 rounded" style={{ backgroundColor: "#3b82f620", color: "#3b82f6" }}>
-                        {t.inLibrary.replace("{n}", String(saved))}
-                      </span>
-                    )}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
+      {response && !searching && !nothingFound && <div className="flex flex-col gap-4">{response.sites.map(siteSection)}</div>}
     </div>
   );
 }

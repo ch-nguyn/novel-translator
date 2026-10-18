@@ -20,20 +20,34 @@ export interface FoundNovel {
   title: string;
   author: string;
   status: "ongoing" | "completed" | null;
+  // The title and author in Sino-Vietnamese, when the AI (or the cache) had them
+  titleVi?: string;
+  authorVi?: string;
+}
+
+// One site's novels, most relevant first
+export interface SiteResults {
+  site: string;
+  results: FoundNovel[];
+  // The site could not be searched (down, blocking, changed)
+  failed: boolean;
 }
 
 export interface SearchResponse {
   candidates: SearchCandidate[];
-  results: FoundNovel[];
-  // Sites that could not be searched (down, blocking, changed)
-  failedSites: string[];
+  sites: SiteResults[];
 }
 
 // Why a search could not start: the typed name needs the AI to become Chinese
 export type SearchErrorCode = "needKey" | "badKey" | "aiFailed" | "invalid";
 
 export const MAX_QUERY_CHARS = 100;
-export const MAX_RESULTS = 24;
+export const MAX_RESULTS_PER_SITE = 12;
+
+// Searching asks the AI two quick questions (the Chinese name, the results'
+// names in Sino-Vietnamese) that need no reasoning; always this fast model,
+// whatever model translates chapters, with the reader's OpenAI key
+export const SEARCH_AI_MODEL = "gpt-6-luna";
 
 const HAN = /\p{Script=Han}/u;
 
@@ -92,26 +106,36 @@ export function relevance(novel: FoundNovel, candidates: SearchCandidate[]): num
   return score;
 }
 
-// The sites' results together: taken in turn from each site (so neither
-// drowns the other), the same page once, most relevant first
-export function mergeResults(perSite: FoundNovel[][], candidates: SearchCandidate[]): FoundNovel[] {
+// A site's results, the same page once, most relevant first
+export function rankResults(found: FoundNovel[], candidates: SearchCandidate[]): FoundNovel[] {
   const seen = new Set<string>();
-  const merged: FoundNovel[] = [];
-  const longest = Math.max(0, ...perSite.map((list) => list.length));
-  for (let i = 0; i < longest; i++) {
-    for (const list of perSite) {
-      const novel = list[i];
-      if (!novel || seen.has(novel.url)) continue;
-      seen.add(novel.url);
-      merged.push(novel);
-    }
-  }
-  // Array.prototype.sort is stable: equally relevant novels keep the merged order
-  return merged
+  const unique = found.filter((novel) => !seen.has(novel.url) && !!seen.add(novel.url));
+  // Array.prototype.sort is stable: equally relevant novels keep the site's order
+  return unique
     .map((novel) => ({ novel, score: relevance(novel, candidates) }))
     .sort((a, b) => b.score - a.score)
     .map(({ novel }) => novel)
-    .slice(0, MAX_RESULTS);
+    .slice(0, MAX_RESULTS_PER_SITE);
+}
+
+// A typed name as a cache key: the same words however they were spaced or capitalized
+export function queryKey(query: string): string {
+  return query.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+// The AI's names for `count` texts, in order, from its JSON answer; null if unusable
+export function parseNames(answer: string, count: number): string[] | null {
+  const start = answer.indexOf("{");
+  const end = answer.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const names = (JSON.parse(answer.slice(start, end + 1)) as { names?: unknown })?.names;
+    if (!Array.isArray(names) || names.length !== count) return null;
+    // A name left in Chinese, or not given, is no translation
+    return names.map((name) => (typeof name === "string" && name.trim() && !hasChinese(name) ? name.trim() : ""));
+  } catch {
+    return null;
+  }
 }
 
 // The AI's answer as candidates: the JSON object in it (models sometimes wrap

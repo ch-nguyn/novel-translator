@@ -833,8 +833,7 @@ export default function Home() {
       <NovelSearch
         t={t}
         textColor={textColor}
-        apiKey={getApiKeyForModel(settings)}
-        model={settings.aiModel}
+        apiKey={settings.openaiApiKey}
         library={libraryCounts}
         autoFocus={autoFocus}
         onOpen={openFoundNovel}

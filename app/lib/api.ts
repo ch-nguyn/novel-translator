@@ -101,7 +101,7 @@ export class SearchError extends Error {
 // Novels on the supported sites named `query` (any language), or else exactly
 // `candidate` (a Chinese name guessed by an earlier search)
 export async function searchNovels(
-  params: { query: string; candidate?: SearchCandidate; apiKey: string; model: string },
+  params: { query: string; candidate?: SearchCandidate; apiKey: string },
   signal?: AbortSignal
 ): Promise<SearchResponse> {
   const res = await fetch("/api/search", {
