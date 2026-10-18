@@ -17,7 +17,7 @@ export interface AIModelOption {
   models: string[];
 }
 
-export const DEFAULT_AI_MODEL = "gpt-5.6-luna";
+export const DEFAULT_AI_MODEL = "gpt-6-luna";
 
 export const AI_MODEL_OPTIONS: AIModelOption[] = [
   {
