@@ -14,6 +14,9 @@ export interface NovelSite {
   chapterPath: RegExp;
   // Groups chapters by novel: a key unique to the book, from the URL path
   novelSlug: (path: string) => string | null;
+  // Other domains serving the same pages at the same paths: their links are
+  // read as this site's, and they are tried when this site fails
+  mirrors?: string[];
 }
 
 export const NOVEL_SITES: NovelSite[] = [
@@ -30,6 +33,7 @@ export const NOVEL_SITES: NovelSite[] = [
       const bookId = path.match(/^\/\d+\/(\d+)\//)?.[1];
       return bookId ? `biquuge-${bookId}` : null;
     },
+    mirrors: ["biquge520.net"],
   },
   {
     domain: "ixdzs.tw",
@@ -44,6 +48,33 @@ export const NOVEL_SITES: NovelSite[] = [
       return bookId ? `ixdzs-${bookId}` : null;
     },
   },
+  {
+    domain: "twkan.cc",
+    homepage: "https://www.twkan.cc",
+    label: "ZH-TW",
+    sample: "https://www.twkan.cc/chapter/6xWidisB72Uwxqaddk1PxZ/3NbW6jms2oFnYcmaLKFhe4.html",
+    // Book: /book/{bookId}.html   Chapter: /chapter/{bookId}/{chapterId}.html
+    // (ids are letters and digits; /chapter/{bookId}/2.html is a page of the chapter list)
+    bookPath: /^\/book\/[A-Za-z0-9]+\.html$/,
+    chapterPath: /^\/chapter\/[A-Za-z0-9]+\/(?=\d*[A-Za-z])[A-Za-z0-9]+\.html$/,
+    novelSlug: (path) => {
+      const bookId = path.match(/^\/(?:book|chapter)\/([A-Za-z0-9]+)[/.]/)?.[1];
+      return bookId ? `twkan-${bookId}` : null;
+    },
+  },
+  {
+    domain: "quanben.io",
+    homepage: "https://www.quanben.io",
+    label: "ZH",
+    sample: "https://www.quanben.io/n/fanrenxiuxianzhuan/1.html",
+    // Book: /n/{pinyin name}/   Chapter: /n/{pinyin name}/{n}.html (big5. serves the same in traditional)
+    bookPath: /^\/n\/[a-z0-9_-]+\/?$/,
+    chapterPath: /^\/n\/[a-z0-9_-]+\/\d+\.html$/,
+    novelSlug: (path) => {
+      const name = path.match(/^\/n\/([a-z0-9_-]+)\//)?.[1];
+      return name ? `quanben-${name}` : null;
+    },
+  },
 ];
 
 function parseWebUrl(url: string): URL | null {
@@ -55,28 +86,64 @@ function parseWebUrl(url: string): URL | null {
   }
 }
 
-// Matches on the URL's real hostname (exact domain or a subdomain of it), so
-// arbitrary URLs that merely contain a supported domain are rejected
+function onDomain(hostname: string, domain: string): boolean {
+  return hostname === domain || hostname.endsWith("." + domain);
+}
+
+function hostnameOf(parsed: URL): string {
+  return parsed.hostname.replace(/\.+$/, "").toLowerCase();
+}
+
+// Matches on the URL's real hostname (exact domain or a subdomain of it, or of
+// a mirror), so arbitrary URLs that merely contain a supported domain are rejected
 export function findSite(url: string): NovelSite | null {
   const parsed = parseWebUrl(url);
   if (!parsed) return null;
-  const hostname = parsed.hostname.replace(/\.+$/, "").toLowerCase();
-  return NOVEL_SITES.find((s) => hostname === s.domain || hostname.endsWith("." + s.domain)) ?? null;
+  const hostname = hostnameOf(parsed);
+  return NOVEL_SITES.find((s) => [s.domain, ...(s.mirrors ?? [])].some((domain) => onDomain(hostname, domain))) ?? null;
+}
+
+// `url` on the site's own domain when it is on a mirror (the same page), so a
+// chapter is saved once whichever domain served it; otherwise `url` itself
+export function canonicalUrl(url: string): string {
+  const parsed = parseWebUrl(url);
+  const site = findSite(url);
+  if (!parsed || !site?.mirrors || onDomain(hostnameOf(parsed), site.domain)) return url;
+  parsed.host = new URL(site.homepage).host;
+  parsed.protocol = "https:";
+  return parsed.href;
+}
+
+// `url` on the site's other domains (its mirrors, or the site itself for a
+// mirror's page), to try when the domain it is on fails
+export function mirrorUrls(url: string): string[] {
+  const parsed = parseWebUrl(url);
+  const site = findSite(url);
+  if (!parsed || !site?.mirrors) return [];
+  return [site.domain, ...site.mirrors]
+    .filter((domain) => !onDomain(hostnameOf(parsed), domain))
+    .map((domain) => {
+      const mirror = new URL(parsed.href);
+      mirror.hostname = `www.${domain}`;
+      mirror.protocol = "https:";
+      return mirror.href;
+    });
 }
 
 // A link pasted without its scheme ("www.biquuge.com/9/9685") still works
 export function normalizeEnteredUrl(raw: string): string {
   const url = raw.trim();
-  return /^[a-z][a-z\d+.-]*:\/\//i.test(url) ? url : `https://${url}`;
+  return canonicalUrl(/^[a-z][a-z\d+.-]*:\/\//i.test(url) ? url : `https://${url}`);
 }
 
-// The book page `url` points to, normalized with the trailing slash the
-// sites require, or null when it is not a book page of a supported site
+// The book page `url` points to, normalized (on the site's own domain, with
+// the trailing slash folder-style pages require), or null when it is not a
+// book page of a supported site
 export function bookPageUrl(url: string): string | null {
-  const parsed = parseWebUrl(url);
+  const parsed = parseWebUrl(canonicalUrl(url));
   const site = findSite(url);
   if (!parsed || !site || !site.bookPath.test(parsed.pathname)) return null;
-  if (!parsed.pathname.endsWith("/")) parsed.pathname += "/";
+  if (!parsed.pathname.endsWith("/") && !parsed.pathname.endsWith(".html")) parsed.pathname += "/";
   parsed.search = "";
   parsed.hash = "";
   return parsed.href;

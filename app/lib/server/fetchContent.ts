@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import { lookup } from "dns/promises";
-import { bookPageUrl, findSite, isChapterUrl } from "../sites";
+import { bookPageUrl, canonicalUrl, findSite, isChapterUrl, mirrorUrls } from "../sites";
 
 interface SiteConfig {
   content: string;
@@ -8,8 +8,11 @@ interface SiteConfig {
   chapterNameSelector?: string;
   // Custom title parser when underscore-split heuristic does not fit (e.g. biquuge h1: "chapter-《novel》")
   extractTitles?: (fullTitle: string, h1: string) => { chapterName: string; novelName: string };
-  // Links to the first chapter on the book's page, tried in order
-  firstChapter: string[];
+  // The first chapter's link on the book's page, tried in order: selectors of
+  // links, or functions reading it from the page (relative to the book's URL)
+  firstChapter: (string | (($: cheerio.CheerioAPI) => string | undefined))[];
+  // A "下一页" (next page) link here leads to the next chapter, not to a part of this one
+  noSubPages?: boolean;
   // Non-story elements inside `content` (scripts and the like are always removed)
   removeSelectors?: string;
   // Non-story lines in the chapter text
@@ -47,6 +50,38 @@ const SITE_SELECTORS: Record<string, SiteConfig> = {
     // The chapter title (repeated from the page header) and ad slots
     removeSelectors: "h3, .abg",
   },
+  "twkan.cc": {
+    content: "#content",
+    lang: "zh",
+    // Title: "第1章 戲鬼回家-我不是戲神-三九音域-全文免費閱讀-台灣小說網"
+    extractTitles: (fullTitle, h1) => {
+      const rest = h1 && fullTitle.startsWith(h1 + "-") ? fullTitle.slice(h1.length + 1) : "";
+      return { chapterName: h1, novelName: rest.split("-")[0]?.trim() ?? "" };
+    },
+    // The "start reading" button names the first chapter: data-book-id, data-chapter-id
+    firstChapter: [
+      ($) => {
+        const button = $("[data-book-id][data-chapter-id]").first();
+        const [book, chapter] = [button.attr("data-book-id"), button.attr("data-chapter-id")];
+        return book && chapter ? `/chapter/${book}/${chapter}.html` : undefined;
+      },
+    ],
+    // Every chapter ends with an empty "()"
+    junkLine: /^\(\)$/,
+  },
+  "quanben.io": {
+    content: "#content",
+    lang: "zh",
+    // Title: "第1章 山边小村 凡人修仙传 - 全本小说网" (big5.: 全本小說網)
+    extractTitles: (fullTitle, h1) => {
+      const title = fullTitle.replace(/\s*-\s*全本小[说說][网網]\s*$/, "");
+      return { chapterName: h1, novelName: h1 && title.startsWith(h1) ? title.slice(h1.length).trim() : "" };
+    },
+    // Chapters are numbered from 1 (the book's page only links the chapter list)
+    firstChapter: [() => "1.html"],
+    // "上一页" / "下一页" (previous / next page) are the chapters around
+    noSubPages: true,
+  },
 };
 
 function getSiteConfig(url: string): SiteConfig | null {
@@ -79,9 +114,9 @@ function extractNav($: cheerio.CheerioAPI, currentUrl: string): NavResult {
     // Chapter-level navigation
     if (!nav.prevChapter && text === "上一章") nav.prevChapter = href;
     if (!nav.nextChapter && text === "下一章") nav.nextChapter = href;
-    // Sub-page navigation (within same chapter)
-    if (!nav.nextPage && text === "下一页") nav.nextPage = href;
-    if (!nav.prevPage && text === "上一页") nav.prevPage = href;
+    // Sub-page navigation (within same chapter), in either script
+    if (!nav.nextPage && (text === "下一页" || text === "下一頁")) nav.nextPage = href;
+    if (!nav.prevPage && (text === "上一页" || text === "上一頁")) nav.prevPage = href;
   });
 
   // ixdzs.tw: explicit classes
@@ -173,13 +208,18 @@ function parseHtml(html: string, siteConfig: SiteConfig, baseUrl: string) {
     return href && isChapterUrl(href) ? href : null;
   };
 
+  // Where "下一页" (next page) means the next chapter
+  const [prev, next] = siteConfig.noSubPages
+    ? [nav.prevChapter ?? nav.prevPage, nav.nextChapter ?? nav.nextPage]
+    : [nav.prevChapter, nav.nextChapter];
+
   return {
     text,
     fullTitle,
     h1,
-    prevUrl: chapterLink(nav.prevChapter),
-    nextUrl: chapterLink(nav.nextChapter),
-    nextPageUrl: abs(nav.nextPage),
+    prevUrl: chapterLink(prev),
+    nextUrl: chapterLink(next),
+    nextPageUrl: siteConfig.noSubPages ? null : abs(nav.nextPage),
     customNovelName,
     customChapterName,
   };
@@ -267,11 +307,12 @@ export async function fetchWithCheerio(url: string, timeoutMs = FETCH_TIMEOUT_MS
     if (!getSiteConfig(url)) throw new FetchContentError("The page redirected to an unsupported site", 422);
   }
 
-  if (!res.ok) return null;
+  if (!res.ok || res.headers.get("cf-mitigated") === "challenge") return null;
 
   const html = await res.text();
-  // Detect Cloudflare challenge page
-  if (html.includes("Just a moment") || html.includes("challenge-platform")) {
+  // A Cloudflare challenge served as a page. (Challenges are usually a 403;
+  // pages that passed can still carry Cloudflare's "challenge-platform" script.)
+  if (/<title>\s*Just a moment/i.test(html)) {
     return null;
   }
   return { html, url };
@@ -300,7 +341,7 @@ async function fetchWithPuppeteer(url: string): Promise<FetchedPage> {
     // Production (Vercel): use @sparticuz/chromium-min with remote binary
     const chromium = await import("@sparticuz/chromium-min");
     executablePath = await chromium.default.executablePath(
-      "https://github.com/nichochar/chromium-brotli/releases/download/v143.0.0/chromium-v143.0.0-pack.tar"
+      "https://github.com/Sparticuz/chromium/releases/download/v143.0.4/chromium-v143.0.4-pack.x64.tar"
     );
     args = chromium.default.args;
   }
@@ -360,6 +401,36 @@ export class FetchContentError extends Error {
   }
 }
 
+// `url`'s page by a plain fetch, from a mirror of its site if the site fails
+// or serves a page that is not `usable` (an error page sent as a success)
+async function fetchFromSiteOrMirror(url: string, usable?: (page: FetchedPage) => boolean): Promise<FetchedPage | null> {
+  const mirrors = mirrorUrls(url);
+  let failure: unknown = null;
+  let unusable: FetchedPage | null = null;
+  try {
+    const page = await fetchWithCheerio(url);
+    if (mirrors.length === 0) return page;
+    if (page && (!usable || usable(page))) return page;
+    unusable = page;
+  } catch (e) {
+    if (mirrors.length === 0) throw e;
+    failure = e;
+  }
+  for (const mirror of mirrors) {
+    const mirrored = await fetchWithCheerio(mirror).catch(() => null);
+    if (mirrored && (!usable || usable(mirrored))) return mirrored;
+  }
+  // The site's own failure tells more than the mirrors'
+  if (failure) throw failure;
+  return unusable;
+}
+
+// Whether a fetched page holds a chapter's text
+function hasChapter(page: FetchedPage): boolean {
+  const config = getSiteConfig(page.url);
+  return !!config && !!parseHtml(page.html, config, page.url)?.text.trim();
+}
+
 export interface ChapterContent {
   text: string;
   prevUrl: string | null;
@@ -380,7 +451,7 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
   // 1. Use provided HTML if available
   // 2. Try simple fetch
   // 3. Fallback to Puppeteer for Cloudflare-protected sites
-  let page = providedHtml ? { html: providedHtml, url } : await fetchWithCheerio(url);
+  let page = providedHtml ? { html: providedHtml, url } : await fetchFromSiteOrMirror(url, hasChapter);
 
   if (!page) {
     page = await fetchWithPuppeteer(url);
@@ -402,7 +473,7 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
 
   // Sub-page links come from the scraped page; only follow them to supported sites
   while (nextPageUrl && subPage < maxSubPages && getSiteConfig(nextPageUrl)) {
-    const subPageResult = await fetchWithCheerio(nextPageUrl);
+    const subPageResult = await fetchFromSiteOrMirror(nextPageUrl, hasChapter);
     // Never return part of a chapter as if it were the whole chapter
     if (!subPageResult) {
       throw new FetchContentError(`Could not load part ${subPage + 2} of this chapter. Please try again.`, 502);
@@ -435,8 +506,9 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
 
   return {
     text: cleaned,
-    prevUrl: result.prevUrl,
-    nextUrl: result.nextUrl,
+    // On the site's own domain when a mirror served the page
+    prevUrl: result.prevUrl && canonicalUrl(result.prevUrl),
+    nextUrl: result.nextUrl && canonicalUrl(result.nextUrl),
     title: titleStr,
     novelName,
     chapterName,
@@ -448,21 +520,21 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
 // page, otherwise `url` itself (chapters are checked when they are fetched)
 export async function resolveChapterUrl(url: string): Promise<string> {
   const bookUrl = bookPageUrl(url);
-  if (!bookUrl) return url;
+  if (!bookUrl) return canonicalUrl(url);
   const siteConfig = getSiteConfig(bookUrl)!;
 
-  const page = await fetchWithCheerio(bookUrl);
+  const page = await fetchFromSiteOrMirror(bookUrl);
   if (!page) throw new FetchContentError("Could not load the novel's page. Please try again.", 502);
 
   const $ = cheerio.load(page.html);
-  for (const selector of siteConfig.firstChapter) {
-    const href = $(selector).first().attr("href");
+  for (const find of siteConfig.firstChapter) {
+    const href = typeof find === "string" ? $(find).first().attr("href") : find($);
     if (!href) continue;
     try {
       const chapter = new URL(href, page.url);
       // Keep https when the site redirected to plain http
       if (new URL(bookUrl).protocol === "https:") chapter.protocol = "https:";
-      if (isChapterUrl(chapter.href)) return chapter.href;
+      if (isChapterUrl(chapter.href)) return canonicalUrl(chapter.href);
     } catch {
       // not a usable link; try the next selector
     }

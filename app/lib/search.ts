@@ -3,7 +3,8 @@
 
 // The Chinese name the sites are searched with, as the AI guessed it from the
 // typed name (or the typed name itself when it is Chinese already). The sites
-// differ in script: biquuge.com wants simplified, ixdzs.tw shows traditional.
+// differ in script: biquuge.com wants simplified, ixdzs.tw and twkan.cc show
+// traditional (and take either).
 export interface SearchCandidate {
   title: string;
   titleTraditional?: string;

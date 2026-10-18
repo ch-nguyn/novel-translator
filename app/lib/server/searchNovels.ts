@@ -1,5 +1,5 @@
 import * as cheerio from "cheerio";
-import { bookPageUrl, NOVEL_SITES, NovelSite } from "../sites";
+import { bookPageUrl, mirrorUrls, NOVEL_SITES, NovelSite } from "../sites";
 import {
   FoundNovel,
   hasChinese,
@@ -72,18 +72,59 @@ const SITE_SEARCH: Record<string, SiteSearch> = {
         })
         .get(),
   },
+  // Results: <div class="bookbox"> per novel, "<h2 class="bookname"><a>", "<div class="author">作者：忘語".
+  // Searches titles and authors, in either script; no status. Refuses many searches in a row (HTTP 400).
+  "twkan.cc": {
+    url: (homepage, query) => `${homepage}/search/${encodeURIComponent(query)}.html`,
+    parse: ($) =>
+      $(".bookbox")
+        .map((_, el) => {
+          const link = $(el).find(".bookname a").first();
+          const author = $(el).find(".author").filter((_, a) => $(a).text().trim().startsWith("作者")).first().text();
+          return {
+            url: link.attr("href") ?? "",
+            site: "twkan.cc",
+            title: link.text().trim(),
+            author: author.trim().replace(/^作者[：:]\s*/, ""),
+            status: null,
+          };
+        })
+        .get(),
+  },
+  // Results: <div class="list2"> per novel, "<h3><a>", "<span itemprop="author">". Searches titles
+  // and authors, in either script; no status.
+  "quanben.io": {
+    url: (homepage, query) => `${homepage}/index.php?c=book&a=search&keywords=${encodeURIComponent(query)}`,
+    parse: ($) =>
+      $(".list2")
+        .map((_, el) => {
+          const link = $(el).find("h3 a").first();
+          return {
+            url: link.attr("href") ?? "",
+            site: "quanben.io",
+            title: link.text().trim(),
+            author: $(el).find("[itemprop=author]").first().text().trim(),
+            status: null,
+          };
+        })
+        .get(),
+  },
 };
 
 // The novels a site lists for `query`; null if the site could not be searched
 async function searchPage(site: NovelSite, query: string): Promise<FoundNovel[] | null> {
   const search = SITE_SEARCH[site.domain];
   if (!search) return null;
-  let page;
-  try {
-    page = await fetchWithCheerio(search.url(site.homepage, query), SEARCH_TIMEOUT_MS);
-  } catch (e) {
-    console.error(`[search] ${site.domain}: ${e instanceof Error ? e.message : e}`);
-    return null;
+  const url = search.url(site.homepage, query);
+  let page = null;
+  // From a mirror of the site when the site fails
+  for (const tried of [url, ...mirrorUrls(url)]) {
+    try {
+      page = await fetchWithCheerio(tried, SEARCH_TIMEOUT_MS);
+    } catch (e) {
+      console.error(`[search] ${tried}: ${e instanceof Error ? e.message : e}`);
+    }
+    if (page) break;
   }
   if (!page) return null;
   const found: FoundNovel[] = [];
