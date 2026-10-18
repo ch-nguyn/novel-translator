@@ -164,7 +164,7 @@ export default function Home() {
     appLang: "vi",
     autoClearNovels: false,
     reasoningEffort: "medium",
-    autoGlossary: true,
+    autoGlossary: false,
     speechEngine: "device",
     speechVoice: "",
     speechAiVoice: DEFAULT_AI_VOICE,
@@ -1081,6 +1081,7 @@ export default function Home() {
       buttonLabel={buttonLabel}
       hasApiKey={hasApiKey}
       onAddApiKey={() => openSettings("ai")}
+      onSubscribe={() => openSettings("account")}
     />
   );
 
@@ -1466,7 +1467,9 @@ export default function Home() {
             {settingsTab === "ai" && <AISettingsPanel settings={settings} systemAI={systemAI} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "speech" && <SpeechSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "general" && <GeneralSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
-            {settingsTab === "account" && <AccountPanel textColor={textColor} t={t} />}
+            {settingsTab === "account" && (
+              <AccountPanel textColor={textColor} t={t} lang={settings.appLang} onAccessChange={() => refreshSystemAI().then(setSystemAI)} />
+            )}
             {settingsTab === "contact" && <ContactPanel textColor={textColor} />}
           </TabPanel>
         </Sheet>

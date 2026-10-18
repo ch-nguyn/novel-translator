@@ -3,6 +3,8 @@
 import { useRef } from "react";
 import { Translations } from "../lib/i18n";
 import { NOVEL_SITES } from "../lib/sites";
+import { PLAN_PRICE_VND } from "../lib/plan";
+import { formatPrice } from "./SubscriptionPanel";
 
 interface Props {
   t: Translations;
@@ -16,6 +18,7 @@ interface Props {
   buttonLabel: string;
   hasApiKey: boolean;
   onAddApiKey: () => void;
+  onSubscribe: () => void;
   autoFocus?: boolean;
 }
 
@@ -32,6 +35,7 @@ export default function LinkForm({
   buttonLabel,
   hasApiKey,
   onAddApiKey,
+  onSubscribe,
   autoFocus,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -85,16 +89,24 @@ export default function LinkForm({
 
       {!hasApiKey && (
         <div
-          className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg border text-sm"
+          className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-3 py-2 rounded-lg border text-sm"
           style={{ borderColor: "#f59e0b80", backgroundColor: "#f59e0b14" }}
         >
           <span>{t.needApiKey}</span>
-          <button
-            onClick={onAddApiKey}
-            className="shrink-0 px-3 py-1 rounded-md text-xs font-medium cursor-pointer text-white bg-amber-600 hover:bg-amber-700"
-          >
-            {t.enterApiKey}
-          </button>
+          <span className="flex gap-2 shrink-0">
+            <button
+              onClick={onSubscribe}
+              className="px-3 py-1 rounded-md text-xs font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
+            >
+              {t.planButton.replace("{price}", formatPrice(PLAN_PRICE_VND))}
+            </button>
+            <button
+              onClick={onAddApiKey}
+              className="px-3 py-1 rounded-md text-xs font-medium cursor-pointer text-white bg-amber-600 hover:bg-amber-700"
+            >
+              {t.enterApiKey}
+            </button>
+          </span>
         </div>
       )}
 

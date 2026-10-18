@@ -5,7 +5,7 @@ export const metadata: Metadata = { title: "Chính sách quyền riêng tư · N
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Chính sách quyền riêng tư" updated="18/10/2026">
+    <LegalPage title="Chính sách quyền riêng tư" updated="19/10/2026">
       <p className="mt-6">
         Novel Translator giúp bạn đọc truyện tiếng Trung bằng tiếng Việt. Trang này nói rõ ứng dụng lưu những gì và dùng vào việc gì.
       </p>
@@ -39,14 +39,21 @@ export default function PrivacyPage() {
           Nội dung chương và API key của bạn được gửi qua máy chủ của ứng dụng tới nhà cung cấp AI (OpenAI, Google, Anthropic, OpenRouter tùy model bạn chọn) để dịch.
           Máy chủ chỉ dùng API key cho lượt dịch đó.
         </li>
+        <li>Khi bạn dùng gói tháng, nội dung chương được gửi tới dịch vụ AI của ứng dụng thay cho API key của bạn.</li>
         <li>Khi dịch chạy nền, chương đã dịch được giữ tạm trên máy chủ tối đa 7 ngày cho tới khi máy của bạn tải về.</li>
         <li>Tên truyện và tên chương đã dịch được lưu đệm chung để lần sau dịch nhanh hơn. Phần này không gắn với bạn.</li>
       </ul>
 
+      <h2>Khi mua gói tháng</h2>
+      <p>
+        Gói tháng được thanh toán bằng chuyển khoản ngân hàng; SePay báo cho ứng dụng khi tiền về. Ứng dụng lưu số tiền, nội dung chuyển khoản,
+        mã giao dịch và thời hạn gói của bạn để kích hoạt và gia hạn gói. Ứng dụng không nhận hay lưu thông tin thẻ hay tài khoản ngân hàng của bạn.
+      </p>
+
       <h2>Chia sẻ dữ liệu</h2>
       <p>
         Ứng dụng không bán hay chia sẻ thông tin của bạn cho bên nào khác, ngoài các nhà cung cấp dịch vụ cần để ứng dụng chạy:
-        Vercel (máy chủ), Neon (cơ sở dữ liệu), Upstash (bộ nhớ đệm) và nhà cung cấp AI bạn chọn.
+        Vercel (máy chủ), Neon (cơ sở dữ liệu), Upstash (bộ nhớ đệm), SePay (thanh toán) và nhà cung cấp AI.
       </p>
 
       <h2>Xóa tài khoản</h2>

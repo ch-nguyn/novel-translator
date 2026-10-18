@@ -3,14 +3,19 @@
 import { useState } from "react";
 import { Translations } from "../lib/i18n";
 import { authClient, signInWithGoogle } from "../lib/auth";
+import { PLAN_PRICE_VND } from "../lib/plan";
+import SubscriptionPanel, { formatPrice } from "./SubscriptionPanel";
 
 interface Props {
   textColor: string;
   t: Translations;
+  lang: string;
+  // The user's access to the app's AI may have changed (plan paid)
+  onAccessChange: () => void;
 }
 
-// Signing in with Google, or the signed-in account
-export default function AccountPanel({ textColor, t }: Props) {
+// Signing in with Google, or the signed-in account and its monthly plan
+export default function AccountPanel({ textColor, t, lang, onAccessChange }: Props) {
   const { data: session, isPending } = authClient.useSession();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -60,7 +65,9 @@ export default function AccountPanel({ textColor, t }: Props) {
             {t.signOut}
           </button>
         </div>
-      ) : (
+      ) : null}
+      {user && <SubscriptionPanel key={user.id} textColor={textColor} t={t} lang={lang} onPaid={onAccessChange} />}
+      {!isPending && !user && (
         <div className="flex flex-col gap-3">
           <button
             onClick={signIn}
@@ -72,6 +79,7 @@ export default function AccountPanel({ textColor, t }: Props) {
             {t.signInGoogle}
           </button>
           {failed && <p role="alert" className="text-sm text-red-600">{t.signInFailed}</p>}
+          <p className="text-sm">{t.planSignIn.replace("{price}", formatPrice(PLAN_PRICE_VND))}</p>
           <p className="text-xs" style={{ color: textColor + "80" }}>{t.accountNote}</p>
         </div>
       )}

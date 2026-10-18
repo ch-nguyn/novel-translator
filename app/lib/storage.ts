@@ -47,7 +47,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   appLang: "vi",
   autoClearNovels: false,
   reasoningEffort: "medium",
-  autoGlossary: true,
+  autoGlossary: false,
   speechEngine: "device",
   speechVoice: "",
   speechAiVoice: DEFAULT_AI_VOICE,
