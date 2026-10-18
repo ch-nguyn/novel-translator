@@ -17,13 +17,18 @@
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@upstash/redis": "^1.39.0",
+    "better-auth": "^1.7.10",
     "cheerio": "^1.2.0",
     "next": "^16.1.6",
+    "pg": "^8.23.1",
     "postcss": "^8.5.8",
     "puppeteer-core": "^24.39.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "tailwindcss": "^4.2.1",
     "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
   }
 }

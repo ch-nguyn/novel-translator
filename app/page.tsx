@@ -52,6 +52,7 @@ import NovelSearch from "./components/NovelSearch";
 import { FoundNovel } from "./lib/search";
 import SavedChaptersList from "./components/SavedChaptersList";
 import ChapterDirectory from "./components/ChapterDirectory";
+import AccountPanel from "./components/AccountPanel";
 import SavedNovelsList from "./components/SavedNovelsList";
 import NavButtons from "./components/NavButtons";
 import ContactPanel from "./components/ContactPanel";
@@ -73,7 +74,7 @@ type LibraryTab = "chapters" | "names" | "novels";
 type ChapterView = "saved" | "toc";
 // Novels whose sites are asked for new chapters, the most recently read first
 const MAX_CHECKED_NOVELS = 20;
-type SettingsTab = "ai" | "speech" | "general" | "contact";
+type SettingsTab = "ai" | "speech" | "general" | "account" | "contact";
 
 function HeaderButton({
   label,
@@ -1376,6 +1377,7 @@ export default function Home() {
                 { id: "ai", label: t.aiSettings },
                 { id: "speech", label: t.readAloud },
                 { id: "general", label: t.general },
+                { id: "account", label: t.account },
                 { id: "contact", label: t.contact },
               ]}
               active={settingsTab}
@@ -1388,6 +1390,7 @@ export default function Home() {
             {settingsTab === "ai" && <AISettingsPanel settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "speech" && <SpeechSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "general" && <GeneralSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
+            {settingsTab === "account" && <AccountPanel textColor={textColor} t={t} />}
             {settingsTab === "contact" && <ContactPanel textColor={textColor} />}
           </TabPanel>
         </Sheet>

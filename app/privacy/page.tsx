@@ -1,0 +1,52 @@
+import type { Metadata } from "next";
+import LegalPage from "../components/LegalPage";
+
+export const metadata: Metadata = { title: "Chính sách quyền riêng tư · Novel Translator" };
+
+export default function PrivacyPage() {
+  return (
+    <LegalPage title="Chính sách quyền riêng tư" updated="18/10/2026">
+      <p className="mt-6">
+        Novel Translator giúp bạn đọc truyện tiếng Trung bằng tiếng Việt. Trang này nói rõ ứng dụng lưu những gì và dùng vào việc gì.
+      </p>
+
+      <h2>Khi đăng nhập bằng Google</h2>
+      <p>Đăng nhập là không bắt buộc. Nếu bạn đăng nhập, ứng dụng chỉ nhận từ Google:</p>
+      <ul>
+        <li>tên, địa chỉ email và ảnh đại diện của bạn.</li>
+      </ul>
+      <p>
+        Những thông tin này được lưu trong cơ sở dữ liệu của ứng dụng để nhận ra tài khoản của bạn, và sau này để quản lý gói dịch vụ bạn mua.
+        Ứng dụng không đọc email, danh bạ, Drive hay bất kỳ dữ liệu nào khác trong tài khoản Google của bạn.
+      </p>
+
+      <h2>Dữ liệu lưu trên máy của bạn</h2>
+      <p>
+        Thư viện truyện, các chương đã dịch, bảng tên riêng, cài đặt và API key bạn nhập đều nằm trong bộ nhớ trình duyệt trên máy của bạn,
+        không được tải lên máy chủ của ứng dụng. Xóa dữ liệu trang web trong trình duyệt là xóa hết những thứ này.
+      </p>
+
+      <h2>Khi dịch truyện</h2>
+      <ul>
+        <li>
+          Nội dung chương và API key của bạn được gửi qua máy chủ của ứng dụng tới nhà cung cấp AI (OpenAI, Google, Anthropic, OpenRouter tùy model bạn chọn) để dịch.
+          API key chỉ dùng cho lượt dịch đó, không được lưu lại.
+        </li>
+        <li>Khi dịch chạy nền, chương đã dịch được giữ tạm trên máy chủ tối đa 7 ngày cho tới khi máy của bạn tải về.</li>
+        <li>Tên truyện và tên chương đã dịch được lưu đệm chung để lần sau dịch nhanh hơn. Phần này không gắn với bạn.</li>
+      </ul>
+
+      <h2>Chia sẻ dữ liệu</h2>
+      <p>
+        Ứng dụng không bán hay chia sẻ thông tin của bạn cho bên nào khác, ngoài các nhà cung cấp dịch vụ cần để ứng dụng chạy:
+        Vercel (máy chủ), Neon (cơ sở dữ liệu), Upstash (bộ nhớ đệm) và nhà cung cấp AI bạn chọn.
+      </p>
+
+      <h2>Xóa tài khoản</h2>
+      <p>
+        Bạn có thể yêu cầu xóa tài khoản và mọi thông tin gắn với nó qua mục Liên hệ trong ứng dụng.
+        Bạn cũng có thể gỡ quyền truy cập của ứng dụng bất cứ lúc nào tại myaccount.google.com/permissions.
+      </p>
+    </LegalPage>
+  );
+}
