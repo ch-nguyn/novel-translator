@@ -3,7 +3,7 @@ import * as cheerio from "cheerio";
 // TEMPORARY: checks from Vercel's servers whether candidate novel sites can be
 // read with a plain fetch. Fixed list only (no user input). Remove after use.
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 export const dynamic = "force-dynamic";
 
 interface Probe {
@@ -98,7 +98,62 @@ async function probe({ url, selector, encoding }: Probe) {
   }
 }
 
-export async function GET() {
+// Pages behind Cloudflare's challenge for plain fetches: can a headless browser pass it?
+const BROWSER_PROBES: Probe[] = [
+  { url: "https://www.biquge7.xyz/52408/1", selector: "div.text" },
+  { url: "https://www.xbanxia.cc/books/53578/25041601.html", selector: "#nr1" },
+  { url: "https://www.piaotia.com/html/15/15678/13132376.html", selector: "#content, body" },
+  { url: "https://www.69shuba.com/", selector: "body" },
+  { url: "https://czbooks.net/", selector: "body" },
+];
+
+async function browserProbe({ url, selector }: Probe) {
+  const started = Date.now();
+  const puppeteer = await import("puppeteer-core");
+  const chromium = await import("@sparticuz/chromium-min");
+  const executablePath = await chromium.default.executablePath(
+    "https://github.com/nichochar/chromium-brotli/releases/download/v143.0.0/chromium-v143.0.0-pack.tar"
+  );
+  const browser = await puppeteer.default.launch({ args: chromium.default.args, executablePath, headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent(HEADERS["User-Agent"]);
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => false });
+    });
+    const res = await page.goto(url, { waitUntil: "networkidle2", timeout: 20_000 }).catch(() => null);
+    // Give a challenge time to solve itself
+    for (let i = 0; i < 8; i++) {
+      const title = await page.title().catch(() => "");
+      if (!/Just a moment|Attention Required/i.test(title)) break;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    const html = await page.content();
+    const $ = cheerio.load(html);
+    const matched = selector ? $(selector) : null;
+    return {
+      url,
+      firstStatus: res?.status() ?? null,
+      finalUrl: page.url(),
+      ms: Date.now() - started,
+      title: $("title").first().text().trim().slice(0, 80),
+      justAMoment: html.includes("Just a moment"),
+      textChars: matched ? matched.text().replace(/\s/g, "").length : null,
+      sample: matched ? matched.first().text().replace(/\s+/g, " ").trim().slice(0, 60) : null,
+    };
+  } catch (e) {
+    return { url, error: e instanceof Error ? `${e.name}: ${e.message}` : String(e), ms: Date.now() - started };
+  } finally {
+    await browser.close();
+  }
+}
+
+export async function GET(request: Request) {
+  if (new URL(request.url).searchParams.get("browser") === "1") {
+    const results = [];
+    for (const p of BROWSER_PROBES) results.push(await browserProbe(p));
+    return Response.json({ region: process.env.VERCEL_REGION ?? null, at: new Date().toISOString(), browser: results });
+  }
   const results = await Promise.all(
     Object.entries(PROBES).map(async ([site, probes]) => {
       // One request at a time per site
