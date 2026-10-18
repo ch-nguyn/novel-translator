@@ -217,7 +217,15 @@ export default function NovelSearch({ t, textColor, apiKey, library, autoFocus, 
           autoFocus={autoFocus}
           data-autofocus={autoFocus || undefined}
           value={state.query}
-          onChange={(e) => setState((s) => ({ ...s, query: e.target.value }))}
+          onChange={(e) => {
+            const query = e.target.value;
+            if (query.trim()) return setState((s) => ({ ...s, query }));
+            // Emptied (its ✕ button, or every letter deleted): the last search goes too
+            abortRef.current?.abort();
+            setSearching(false);
+            setExpanded(new Set());
+            setState({ ...EMPTY, query });
+          }}
           placeholder={t.searchPlaceholder}
           aria-label={t.searchPlaceholder}
           maxLength={100}
