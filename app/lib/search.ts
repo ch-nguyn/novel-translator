@@ -123,19 +123,26 @@ export function queryKey(query: string): string {
   return query.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-// The AI's names for `count` texts, in order, from its JSON answer; null if unusable
+// The AI's names for `count` texts numbered from 1, in order, from its JSON
+// answer ({"1": "Già Thiên", ...}, possibly wrapped in "names"); "" for each
+// it skipped or left in Chinese. Null if the answer is not JSON at all.
 export function parseNames(answer: string, count: number): string[] | null {
   const start = answer.indexOf("{");
   const end = answer.lastIndexOf("}");
   if (start < 0 || end <= start) return null;
+  let data: unknown;
   try {
-    const names = (JSON.parse(answer.slice(start, end + 1)) as { names?: unknown })?.names;
-    if (!Array.isArray(names) || names.length !== count) return null;
-    // A name left in Chinese, or not given, is no translation
-    return names.map((name) => (typeof name === "string" && name.trim() && !hasChinese(name) ? name.trim() : ""));
+    data = JSON.parse(answer.slice(start, end + 1));
   } catch {
     return null;
   }
+  if (!data || typeof data !== "object") return null;
+  const wrapped = (data as { names?: unknown }).names;
+  const names = (wrapped && typeof wrapped === "object" ? wrapped : data) as Record<string, unknown>;
+  const name = (value: unknown) => (typeof value === "string" && value.trim() && !hasChinese(value) ? value.trim() : "");
+  // A list in the same order is fine too, when nothing is missing
+  if (Array.isArray(names)) return names.length === count ? names.map(name) : null;
+  return Array.from({ length: count }, (_, i) => name(names[String(i + 1)]));
 }
 
 // The AI's answer as candidates: the JSON object in it (models sometimes wrap

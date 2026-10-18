@@ -144,7 +144,26 @@ export async function cacheGuess(query: string, candidates: SearchCandidate[]) {
 }
 
 const NAMES_PROMPT = `Transcribe each Chinese web novel title or author name into Sino-Vietnamese (Hán Việt), the way Vietnamese readers write them, with every word capitalized: 遮天 → Già Thiên, 凡人修仙传 → Phàm Nhân Tu Tiên, 辰东 → Thần Đông, 爱潜水的乌贼 → Ái Tiềm Thủy Đích Ô Tặc. Write "：" as ": " and "，" as ", "; keep Latin letters and digits. No Chinese characters in the answer.
-The input is a JSON array. Answer with only {"names":[...]}: the same number of items, in the same order.`;
+The input is a JSON object of numbered names. Answer with only a JSON object with the same numbers: {"1":"Già Thiên","2":"Thần Đông"}.`;
+
+// Names asked of the AI at once: a long list comes back with some missing or merged
+const NAMES_PER_CALL = 8;
+
+// The AI's Sino-Vietnamese names for `texts`, in order ("" where it gave none)
+async function askNames(texts: string[], apiKey: string): Promise<string[]> {
+  const answer = await complete({
+    apiKey,
+    model: SEARCH_AI_MODEL,
+    system: NAMES_PROMPT,
+    input: JSON.stringify(Object.fromEntries(texts.map((text, i) => [i + 1, text]))),
+    maxTokens: 200 + 40 * texts.length,
+    task: "search-names",
+    reasoningEffort: "none",
+  });
+  const names = parseNames(answer, texts.length);
+  if (!names || names.some((name) => !name)) console.error(`[search-names] incomplete answer for ${texts.length} names: ${answer.slice(0, 300)}`);
+  return names ?? texts.map(() => "");
+}
 
 // Sino-Vietnamese names for `texts`, by text: from the cache, else from the
 // AI (when there is a key). Missing when neither has them.
@@ -164,28 +183,31 @@ async function vietnameseNames(texts: string[], apiKey: string): Promise<Map<str
   }
   const missing = texts.filter((text) => !names.has(text));
   if (missing.length === 0 || !apiKey) return names;
-  try {
-    const answer = await complete({
-      apiKey,
-      model: SEARCH_AI_MODEL,
-      system: NAMES_PROMPT,
-      input: JSON.stringify(missing),
-      maxTokens: 200 + 40 * missing.length,
-      task: "search-names",
-      reasoningEffort: "none",
-    });
-    const translated = parseNames(answer, missing.length);
-    if (!translated) return names;
-    const pipeline = redis?.pipeline();
-    missing.forEach((text, i) => {
-      if (!translated[i]) return;
-      names.set(text, translated[i]);
-      if (text.length <= MAX_CACHED_NAME_CHARS) pipeline?.set(NAME_KEY(text), translated[i], { ex: NAME_TTL_SECONDS });
-    });
-    if (pipeline && pipeline.length() > 0) await pipeline.exec().catch(() => {});
-  } catch {
-    // The novels are still listed, under their Chinese names
+  const pipeline = redis?.pipeline();
+  // In small batches side by side, then once more for any the AI skipped
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const asking = texts.filter((text) => !names.has(text));
+    if (asking.length === 0) break;
+    const batches = Array.from({ length: Math.ceil(asking.length / NAMES_PER_CALL) }, (_, i) => asking.slice(i * NAMES_PER_CALL, (i + 1) * NAMES_PER_CALL));
+    const answers = await Promise.all(
+      batches.map((batch) =>
+        askNames(batch, apiKey).catch((e) => {
+          console.error(`[search-names] ${e instanceof Error ? e.message : e}`);
+          // The novels are still listed, under their Chinese names
+          return batch.map(() => "");
+        })
+      )
+    );
+    batches.forEach((batch, b) =>
+      batch.forEach((text, i) => {
+        const name = answers[b][i];
+        if (!name) return;
+        names.set(text, name);
+        if (text.length <= MAX_CACHED_NAME_CHARS) pipeline?.set(NAME_KEY(text), name, { ex: NAME_TTL_SECONDS });
+      })
+    );
   }
+  if (pipeline && pipeline.length() > 0) await pipeline.exec().catch(() => {});
   return names;
 }
 
