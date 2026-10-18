@@ -179,9 +179,9 @@ export default function Home() {
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const checkingUpdatesRef = useRef(false);
   const { data: session } = authClient.useSession();
-  const userId = session?.user.id ?? null;
-  const userIdRef = useRef(userId);
-  userIdRef.current = userId;
+  const sessionId = session?.session.id ?? null;
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
   const settingsPushRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // The chapter being fetched/translated on screen. Opening another chapter
   // leaves it translating (and saving) in the background, off screen.
@@ -336,10 +336,10 @@ export default function Home() {
   // A signed-in user's settings come from their account, again whenever the
   // app is brought back (they may have been changed on another device)
   useEffect(() => {
-    if (!userId) return;
+    if (!sessionId) return;
     const controller = new AbortController();
     const sync = () => {
-      syncSettings(userId, controller.signal)
+      syncSettings(sessionId, controller.signal)
         .then((synced) => synced && setSettings(synced))
         .catch(() => {});
     };
@@ -355,7 +355,7 @@ export default function Home() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [userId]);
+  }, [sessionId]);
 
   // The header slides away while reading down the chapter and returns on scrolling up
   useEffect(() => {
@@ -476,7 +476,7 @@ export default function Home() {
     const updated = { ...settings, ...patch };
     setSettings(updated);
     saveSettings(updated);
-    if (!userIdRef.current) return;
+    if (!sessionIdRef.current) return;
     // Typing a key or prompt is sent once it pauses
     clearTimeout(settingsPushRef.current);
     settingsPushRef.current = setTimeout(flushSettings, SETTINGS_PUSH_DELAY_MS);
@@ -487,7 +487,7 @@ export default function Home() {
     if (settingsPushRef.current === undefined) return;
     clearTimeout(settingsPushRef.current);
     settingsPushRef.current = undefined;
-    if (userIdRef.current) pushSettings(getSettings(), getSettingsUpdatedAt()).catch(() => {});
+    if (sessionIdRef.current) pushSettings(getSettings(), getSettingsUpdatedAt()).catch(() => {});
   }
 
   function refreshSaved() {

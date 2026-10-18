@@ -5,9 +5,9 @@ import { MAX_STORED_TERMS, sanitizeTerms } from "./glossary";
 const STORAGE_KEY = "novel-translator-chapters";
 const CURRENT_KEY = "novel-translator-current";
 const SETTINGS_KEY = "novel-translator-settings";
-// When the settings were last changed, and which account they were last synced with
+// When the settings were last changed, and the sign-in they were last synced in
 const SETTINGS_UPDATED_KEY = "novel-translator-settings-updated";
-const SETTINGS_OWNER_KEY = "novel-translator-settings-owner";
+const SETTINGS_SESSION_KEY = "novel-translator-settings-session";
 const SCROLL_KEY = "novel-translator-scroll";
 const DEVICE_KEY = "novel-translator-device-id";
 const CLEARED_NOVELS_KEY = "novel-translator-cleared-novels";
@@ -319,12 +319,12 @@ export function getSettingsUpdatedAt(): number {
   return localStorage.getItem(SETTINGS_KEY) ? 1 : 0;
 }
 
-export function getSettingsOwner(): string | null {
-  return localStorage.getItem(SETTINGS_OWNER_KEY);
+export function getSettingsSession(): string | null {
+  return localStorage.getItem(SETTINGS_SESSION_KEY);
 }
 
-export function setSettingsOwner(userId: string) {
-  localStorage.setItem(SETTINGS_OWNER_KEY, userId);
+export function setSettingsSession(sessionId: string) {
+  localStorage.setItem(SETTINGS_SESSION_KEY, sessionId);
 }
 
 export function getScrollPosition(url: string): number {
