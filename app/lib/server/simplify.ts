@@ -1,4 +1,5 @@
-import { DEFAULT_AI_MODEL, isOpenAIReasoningModel } from "../types";
+import { DEFAULT_AI_MODEL, GlossaryTerm, isOpenAIReasoningModel } from "../types";
+import { glossaryPrompt } from "../glossary";
 import { endRecord, newStreamNonce, STREAM_ENDED_EARLY_ERROR, TokenUsage } from "../stream";
 
 const VI_PROMPT = `Bạn là biên tập viên chuyên viết lại truyện tiên hiệp/kiếm hiệp tiếng Việt (dịch từ tiếng Trung). Văn gốc thường lủng củng, ngữ pháp sai, từ ngữ khó hiểu. Nhiệm vụ của bạn là viết lại cho mượt mà, đúng văn phong cổ phong nhưng vẫn dễ đọc.
@@ -73,44 +74,6 @@ const LINE_BREAK_INSTRUCTION = `
 function getSystemPrompt(lang: string): string {
   const base = lang === "zh" ? ZH_PROMPT : VI_PROMPT;
   return base + LINE_BREAK_INSTRUCTION;
-}
-
-async function fetchReferenceContent(urls: string): Promise<string> {
-  const links = urls.split(",").map((u) => u.trim()).filter((u) => u.startsWith("http"));
-  if (links.length === 0) return "";
-
-  const results = await Promise.allSettled(
-    links.map(async (url) => {
-      const res = await fetch(url, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; NovelTranslator/1.0)" },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (!res.ok) return "";
-      const html = await res.text();
-      // Strip HTML tags, scripts, styles to get plain text
-      const text = html
-        .replace(/<script[\s\S]*?<\/script>/gi, "")
-        .replace(/<style[\s\S]*?<\/style>/gi, "")
-        .replace(/<[^>]+>/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-      // Limit each page to ~3000 chars to avoid bloating the prompt
-      return text.slice(0, 3000);
-    })
-  );
-
-  const contents = results
-    .map((r, i) => {
-      if (r.status === "fulfilled" && r.value) {
-        return `[Reference from ${links[i]}]:\n${r.value}`;
-      }
-      return "";
-    })
-    .filter(Boolean);
-
-  return contents.length > 0
-    ? "\n\nTHÔNG TIN THAM KHẢO BẮT BUỘC (nguồn chính xác về tên nhân vật, địa danh, thuật ngữ Hán Việt - PHẢI dùng đúng tên/cách phiên âm xuất hiện trong tài liệu này, KHÔNG được tự ý đổi hoặc bịa tên khác. KHÔNG dịch hay nhắc lại nội dung tham khảo này trong bản dịch):\n" + contents.join("\n\n")
-    : "";
 }
 
 function getProvider(model: string): "openai" | "gemini" | "claude" | "openrouter" {
@@ -457,7 +420,8 @@ export interface SimplifyParams {
   model?: string;
   lang?: string;
   customPrompt?: string;
-  referenceLinks?: string;
+  // The novel's glossary; the names appearing in `text` are added to the prompt
+  glossary?: GlossaryTerm[];
   reasoningEffort?: string;
   webSearch?: boolean;
   // Aborts the provider request
@@ -478,7 +442,7 @@ export async function createSimplifyStream({
   model,
   lang,
   customPrompt,
-  referenceLinks,
+  glossary,
   reasoningEffort,
   webSearch,
   signal,
@@ -493,12 +457,7 @@ export async function createSimplifyStream({
   if (customPrompt && typeof customPrompt === "string") {
     systemPrompt += "\n" + customPrompt.trim();
   }
-  if (referenceLinks && typeof referenceLinks === "string") {
-    const refContent = await fetchReferenceContent(referenceLinks);
-    if (refContent) {
-      systemPrompt += refContent;
-    }
-  }
+  if (glossary) systemPrompt += glossaryPrompt(glossary, text);
 
   const nonce = newStreamNonce();
   const request: ProviderRequest = { apiKey, model: resolvedModel, text, systemPrompt, effort, webSearch: !!webSearch, signal, nonce };

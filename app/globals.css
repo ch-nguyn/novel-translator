@@ -40,6 +40,10 @@ html {
   .sheet-right {
     animation-name: slide-from-right;
   }
+  .sheet-center {
+    animation-name: fade-in;
+    animation-duration: 0.15s;
+  }
 }
 .popover {
   animation: drop-in 0.15s ease-out;

@@ -25,8 +25,10 @@ export default function Popover({ label, textColor, bgColor, onClose, children }
   useEffect(() => {
     const panel = panelRef.current;
     const opener = openerRef.current instanceof HTMLElement ? openerRef.current : null;
-    // Unless something inside (e.g. an autoFocus input) already took focus
-    if (panel && !panel.contains(document.activeElement)) panel.focus({ preventScroll: true });
+    // The field marked data-autofocus, if any, unless focus is inside already
+    if (panel && !panel.contains(document.activeElement)) {
+      (panel.querySelector<HTMLElement>("[data-autofocus]") ?? panel).focus({ preventScroll: true });
+    }
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCloseRef.current();

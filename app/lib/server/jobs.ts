@@ -1,11 +1,13 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import { Redis } from "@upstash/redis";
-import { ChapterJob, TranslateOptions, ZH_TITLE_PROMPT } from "../types";
+import { ChapterJob, GlossaryTerm, TranslateOptions, ZH_TITLE_PROMPT } from "../types";
+import { mergeTerms } from "../glossary";
 import { extractNovelSlug } from "../storage";
 import { fetchContent } from "./fetchContent";
 import { createSimplifyStream } from "./simplify";
 import { parseTranslationStream } from "../stream";
 import { translateTitleBatch } from "./translateTitle";
+import { extractTerms } from "./extractTerms";
 
 // Background translation jobs.
 //
@@ -26,6 +28,10 @@ import { translateTitleBatch } from "./translateTitle";
 // Chapters the device has saved are replaced by small "saved" receipts rather
 // than deleted, so a job started from an older view of the device never
 // translates them again.
+//
+// Each translated chapter also reports the names it introduced (newTerms);
+// they are added to the glossary handed to the next chapter, so the chapters
+// of one window name things alike before the device has seen any of them.
 //
 // The API key only travels in request bodies between invocations; it is never
 // written to Redis. Steps passed between invocations are HMAC-signed.
@@ -58,6 +64,8 @@ export interface JobStep extends TranslateOptions {
   remaining: number;
   // Chapters the device already has: url → nextUrl. These are skipped, not re-translated.
   known: Record<string, string | null>;
+  // The novel's glossary, plus the names found by the window's chapters so far
+  glossary: GlossaryTerm[];
 }
 
 let redis: Redis | null | undefined;
@@ -184,6 +192,7 @@ async function fetchNextUrl(url: string): Promise<string | null> {
 export async function runJobStep(db: Redis, step: JobStep): Promise<JobStep | null> {
   let url: string | null = step.url;
   let remaining = step.remaining;
+  let glossary = step.glossary ?? [];
 
   while (url && remaining > 0) {
     if (!(await isCurrentJob(db, step.deviceId, step.jobId))) return null;
@@ -196,6 +205,7 @@ export async function runJobStep(db: Redis, step: JobStep): Promise<JobStep | nu
 
     const existing = await getChapter(db, step.deviceId, url);
     if (isFinished(existing)) {
+      glossary = mergeTerms(glossary, existing!.newTerms ?? []);
       url = existing!.nextUrl ?? (await fetchNextUrl(url));
       continue;
     }
@@ -211,21 +221,29 @@ export async function runJobStep(db: Redis, step: JobStep): Promise<JobStep | nu
     const latest = await getChapter(db, step.deviceId, url);
     if (isFinished(latest)) {
       await db.eval(OWNED_RELEASE, [claim], [token]);
+      glossary = mergeTerms(glossary, latest!.newTerms ?? []);
       url = latest!.nextUrl ?? (await fetchNextUrl(url));
       continue;
     }
 
-    const nextUrl = await translateChapter(db, step, url, token);
-    return nextUrl && remaining > 0 ? { ...step, url: nextUrl, remaining } : null;
+    const result = await translateChapter(db, { ...step, glossary }, url, token);
+    if (!result?.nextUrl || remaining <= 0) return null;
+    return { ...step, url: result.nextUrl, remaining, glossary: mergeTerms(glossary, result.newTerms) };
   }
 
   return null;
 }
 
 // Translates one chapter claimed with `token`, writing progress to Redis.
-// Returns the next chapter URL, or null on failure (the window stops so a bad
-// key or quota error is not repeated for every chapter) or when the claim was lost.
-async function translateChapter(db: Redis, step: JobStep, url: string, token: string): Promise<string | null> {
+// Returns the next chapter URL and the names the chapter introduced, or null
+// on failure (the window stops so a bad key or quota error is not repeated
+// for every chapter) or when the claim was lost.
+async function translateChapter(
+  db: Redis,
+  step: JobStep,
+  url: string,
+  token: string
+): Promise<{ nextUrl: string | null; newTerms: GlossaryTerm[] } | null> {
   const key = chaptersKey(step.deviceId);
   const claim = claimKey(step.deviceId, url);
 
@@ -295,7 +313,7 @@ async function translateChapter(db: Redis, step: JobStep, url: string, token: st
       model: step.model,
       lang: content.lang,
       customPrompt: step.customPrompt,
-      referenceLinks: step.referenceLinks,
+      glossary: step.glossary,
       reasoningEffort: step.reasoningEffort,
       webSearch: step.webSearch,
       signal: lost.signal,
@@ -324,12 +342,22 @@ async function translateChapter(db: Redis, step: JobStep, url: string, token: st
     }
 
     let { novelName, chapterName } = content;
-    if (content.lang === "zh" && chapterName) {
-      try {
-        const [c, n] = await translateTitleBatch(step.apiKey, step.model, [chapterName, novelName], ZH_TITLE_PROMPT);
-        chapterName = c || chapterName;
-        novelName = n || novelName;
-      } catch { /* keep original */ }
+    const [titles, newTerms] = await Promise.all([
+      content.lang === "zh" && chapterName
+        ? translateTitleBatch(step.apiKey, step.model, [chapterName, novelName], ZH_TITLE_PROMPT).catch(() => null)
+        : null,
+      extractTerms({
+        apiKey: step.apiKey,
+        model: step.model,
+        source: content.text,
+        translation: text,
+        known: step.glossary,
+        chapterUrl: url,
+      }),
+    ]);
+    if (titles) {
+      chapterName = titles[0] || chapterName;
+      novelName = titles[1] || novelName;
     }
 
     clearInterval(heartbeat);
@@ -339,11 +367,12 @@ async function translateChapter(db: Redis, step: JobStep, url: string, token: st
       novelName,
       chapterName,
       title: content.lang === "zh" ? chapterName : content.title,
+      newTerms,
     });
     // A worker that lost its claim did not write anything
     if (!saved) return null;
     await db.expire(key, CHAPTER_TTL_SECONDS);
-    return content.nextUrl;
+    return { nextUrl: content.nextUrl, newTerms };
   } catch (e: unknown) {
     clearInterval(heartbeat);
     await save({ status: "error", error: e instanceof Error ? e.message : "Translation failed" }).catch(() => false);
@@ -376,7 +405,7 @@ export function signStep(step: JobStep): string {
     step.apiKey,
     step.model,
     step.customPrompt ?? null,
-    step.referenceLinks ?? null,
+    step.glossary ?? [],
     step.reasoningEffort ?? null,
     step.webSearch ?? null,
   ]);

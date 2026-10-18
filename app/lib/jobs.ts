@@ -1,4 +1,5 @@
 import { ChapterJob, TranslatedChapter, TranslateOptions } from "./types";
+import { applyNames, mergeTerms, promptTerms } from "./glossary";
 import { ChapterMeta, readErrorMessage } from "./api";
 import {
   deduplicateTitle,
@@ -6,10 +7,12 @@ import {
   getClearedNovels,
   getCurrentUrl,
   getDeviceId,
+  getGlossary,
   getSavedChapters,
   getSettings,
   reviveNovel,
   saveChapter,
+  saveGlossary,
   setPendingWindow,
 } from "./storage";
 
@@ -72,7 +75,8 @@ export async function startBackgroundJob(
   // Before the request: the app may be closed before the response arrives
   if (remember) setPendingWindow(url);
 
-  const body = JSON.stringify({ deviceId: getDeviceId(), url, known, force, ...options });
+  const glossary = promptTerms(getGlossary(extractNovelSlug(url)));
+  const body = JSON.stringify({ deviceId: getDeviceId(), url, known, force, glossary, ...options });
   const res = await fetch("/api/jobs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -237,10 +241,25 @@ export async function discardNovelJobs(novelSlug: string) {
   }
 }
 
-// Saves a translated chapter locally. Returns the title it was saved under and
-// how many old chapters had to be removed to make room.
-export function saveTranslatedChapter(url: string, chapter: TranslatedChapter): { title: string; evicted: number } {
+// Saves a translated chapter locally, adding the names it introduced to the
+// novel's glossary and writing every name the way the glossary does. Returns
+// the text and title it was saved with, and how many old chapters had to be
+// removed to make room. Call while holding the storage lock.
+export function saveTranslatedChapter(
+  url: string,
+  chapter: TranslatedChapter
+): { text: string; title: string; evicted: number } {
   const novelSlug = extractNovelSlug(url);
+  const known = getGlossary(novelSlug);
+  const glossary = mergeTerms(known, chapter.newTerms ?? []);
+  if (glossary !== known) {
+    try {
+      saveGlossary(novelSlug, glossary);
+    } catch {
+      // Storage is full: the chapter itself matters more; its names are lost
+    }
+  }
+  const text = applyNames(chapter.text, glossary);
   const others = getSavedChapters().filter((c) => c.url !== url);
   const title = deduplicateTitle(chapter.chapterName || chapter.title || url, novelSlug, others);
   const evicted = saveChapter({
@@ -248,12 +267,12 @@ export function saveTranslatedChapter(url: string, chapter: TranslatedChapter): 
     title,
     novelName: chapter.novelName || "",
     novelSlug,
-    simplifiedText: chapter.text,
+    simplifiedText: text,
     prevUrl: chapter.prevUrl,
     nextUrl: chapter.nextUrl,
     savedAt: Date.now(),
   });
-  return { title, evicted };
+  return { text, title, evicted };
 }
 
 export interface SyncResult {

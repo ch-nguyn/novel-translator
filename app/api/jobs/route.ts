@@ -1,5 +1,6 @@
 import { after } from "next/server";
 import { PREFETCH_CHAPTERS } from "../../lib/types";
+import { sanitizeTerms } from "../../lib/glossary";
 import {
   cancelNovelJob,
   createJob,
@@ -24,7 +25,7 @@ export async function POST(req: Request) {
   if (!db) return Response.json(NOT_CONFIGURED, { status: 501 });
 
   try {
-    const { deviceId, url, apiKey, model, customPrompt, referenceLinks, reasoningEffort, webSearch, known, force } = await req.json();
+    const { deviceId, url, apiKey, model, customPrompt, glossary, reasoningEffort, webSearch, known, force } = await req.json();
 
     if (!isValidDeviceId(deviceId)) {
       return Response.json({ error: "Invalid device id" }, { status: 400 });
@@ -38,6 +39,10 @@ export async function POST(req: Request) {
     const knownChapters = sanitizeKnown(known);
     if (!knownChapters) {
       return Response.json({ error: "Invalid list of saved chapters" }, { status: 400 });
+    }
+    const terms = sanitizeTerms(glossary);
+    if (!terms) {
+      return Response.json({ error: "Invalid glossary" }, { status: 400 });
     }
 
     // `force`: the user opened this chapter and the device does not have it
@@ -53,7 +58,7 @@ export async function POST(req: Request) {
         apiKey,
         model,
         customPrompt,
-        referenceLinks,
+        glossary: terms,
         reasoningEffort,
         webSearch: !!webSearch,
       })

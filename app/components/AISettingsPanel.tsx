@@ -210,23 +210,6 @@ export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Pr
           style={inputStyle}
         />
       </div>
-
-      {isChatGPT && settings.webSearch && (
-        <div>
-          <label className="text-sm font-medium block mb-2">{t.referenceLinks}</label>
-          <textarea
-            value={settings.referenceLinks}
-            onChange={(e) => onUpdate({ referenceLinks: e.target.value })}
-            placeholder={t.referenceLinksPlaceholder}
-            rows={2}
-            className="w-full px-3 py-2 rounded-lg border text-sm resize-y"
-            style={inputStyle}
-          />
-          <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
-            {t.referenceLinksNote}
-          </p>
-        </div>
-      )}
     </div>
   );
 }

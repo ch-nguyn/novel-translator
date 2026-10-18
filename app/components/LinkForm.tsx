@@ -53,6 +53,7 @@ export default function LinkForm({
           type="url"
           inputMode="url"
           autoFocus={autoFocus}
+          data-autofocus={autoFocus || undefined}
           value={url}
           onChange={(e) => onUrlChange(e.target.value)}
           // Holds the open chapter's link; selected so a pasted link replaces it

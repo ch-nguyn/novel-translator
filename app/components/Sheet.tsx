@@ -4,7 +4,8 @@ import { ReactNode, useEffect, useId, useRef } from "react";
 import { CloseIcon } from "./Icons";
 
 interface Props {
-  side: "left" | "right";
+  // "center": a small dialog in the middle of wider screens
+  side: "left" | "right" | "center";
   title: string;
   closeLabel: string;
   textColor: string;
@@ -15,8 +16,9 @@ interface Props {
   children: ReactNode;
 }
 
-// A panel over the page, which stays where it was: a side drawer on wider
-// screens, a bottom sheet on phones. Closes on Esc and on the backdrop.
+// A panel over the page, which stays where it was: a side drawer (or a
+// centered dialog) on wider screens, a bottom sheet on phones. Closes on Esc
+// and on the backdrop.
 export default function Sheet({ side, title, closeLabel, textColor, bgColor, onClose, header, children }: Props) {
   const panelRef = useRef<HTMLDivElement>(null);
   // Read while rendering, before focus moves into the sheet
@@ -31,7 +33,10 @@ export default function Sheet({ side, title, closeLabel, textColor, bgColor, onC
   useEffect(() => {
     const opener = openerRef.current instanceof HTMLElement ? openerRef.current : null;
     const panel = panelRef.current;
-    panel?.focus({ preventScroll: true });
+    // The field marked data-autofocus, if any, unless focus is inside already
+    if (panel && !panel.contains(document.activeElement)) {
+      (panel.querySelector<HTMLElement>("[data-autofocus]") ?? panel).focus({ preventScroll: true });
+    }
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCloseRef.current();
       if (e.key === "Tab" && panel) keepFocusInside(panel, e);
@@ -50,8 +55,10 @@ export default function Sheet({ side, title, closeLabel, textColor, bgColor, onC
 
   const sideClass =
     side === "left"
-      ? "sheet-left sm:left-0 sm:right-auto sm:border-r"
-      : "sheet-right sm:right-0 sm:left-auto sm:border-l";
+      ? "sm:inset-y-0 sm:max-h-none sm:w-[420px] sm:rounded-none sheet-left sm:left-0 sm:right-auto sm:border-r"
+      : side === "right"
+        ? "sm:inset-y-0 sm:max-h-none sm:w-[420px] sm:rounded-none sheet-right sm:right-0 sm:left-auto sm:border-l"
+        : "sheet-center sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-[min(28rem,calc(100vw-2rem))] sm:rounded-2xl sm:border";
 
   return (
     <div className="fixed inset-0 z-50">
@@ -63,9 +70,7 @@ export default function Sheet({ side, title, closeLabel, textColor, bgColor, onC
         aria-labelledby={titleId}
         tabIndex={-1}
         className={
-          "sheet absolute inset-x-0 bottom-0 flex flex-col max-h-[85dvh] rounded-t-2xl shadow-2xl outline-none " +
-          "sm:inset-y-0 sm:max-h-none sm:w-[420px] sm:rounded-none " +
-          sideClass
+          "sheet absolute inset-x-0 bottom-0 flex flex-col max-h-[85dvh] rounded-t-2xl shadow-2xl outline-none " + sideClass
         }
         style={{ backgroundColor: bgColor, color: textColor, borderColor: textColor + "20" }}
       >

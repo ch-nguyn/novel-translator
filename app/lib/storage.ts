@@ -1,5 +1,6 @@
-import { DEFAULT_AI_MODEL, SavedChapter, ReaderSettings } from "./types";
+import { DEFAULT_AI_MODEL, GlossaryTerm, SavedChapter, ReaderSettings } from "./types";
 import { findSite } from "./sites";
+import { MAX_STORED_TERMS, sanitizeTerms } from "./glossary";
 
 const STORAGE_KEY = "novel-translator-chapters";
 const CURRENT_KEY = "novel-translator-current";
@@ -8,6 +9,8 @@ const SCROLL_KEY = "novel-translator-scroll";
 const DEVICE_KEY = "novel-translator-device-id";
 const CLEARED_NOVELS_KEY = "novel-translator-cleared-novels";
 const PENDING_WINDOW_KEY = "novel-translator-pending-window";
+// One key per novel: `${GLOSSARY_KEY_PREFIX}${novelSlug}`
+const GLOSSARY_KEY_PREFIX = "novel-translator-glossary:";
 const PENDING_WINDOW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_SCROLL_POSITIONS = 300;
 const MAX_CHAPTERS_PER_NOVEL = 100;
@@ -31,7 +34,6 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   customPrompt: "",
   appLang: "vi",
   autoClearNovels: false,
-  referenceLinks: "",
   reasoningEffort: "medium",
   webSearch: false,
 };
@@ -151,12 +153,36 @@ function limitNovelChapters(chapters: SavedChapter[], novelSlug: string): SavedC
   return chapters.filter((c) => c.novelSlug !== novelSlug || !toRemove.has(c.url));
 }
 
+// Storage keys whose change (in another tab) affects the open novel's names
+export function isGlossaryStorageKey(key: string | null): boolean {
+  return key === null || key === STORAGE_KEY || key.startsWith(GLOSSARY_KEY_PREFIX);
+}
+
+// Rewrites the text of a novel's saved chapters (e.g. after a name was corrected)
+export function rewriteNovelChapters(novelSlug: string, rewrite: (text: string) => string) {
+  let changed = false;
+  const chapters = getSavedChapters().map((c) => {
+    if (c.novelSlug !== novelSlug) return c;
+    const simplifiedText = rewrite(c.simplifiedText);
+    if (simplifiedText === c.simplifiedText) return c;
+    changed = true;
+    return { ...c, simplifiedText };
+  });
+  if (!changed) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
+  } catch (e) {
+    throw isQuotaError(e) ? new StorageFullError() : e;
+  }
+}
+
 export function clearNovelChapters(novelSlug: string) {
   const chapters = getSavedChapters().filter((c) => c.novelSlug !== novelSlug);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
   const cleared = getClearedNovels();
   cleared.add(novelSlug);
   localStorage.setItem(CLEARED_NOVELS_KEY, JSON.stringify([...cleared]));
+  localStorage.removeItem(GLOSSARY_KEY_PREFIX + novelSlug);
   // Clear current URL if it belonged to this novel
   const currentUrl = getCurrentUrl();
   if (currentUrl && extractNovelSlug(currentUrl) === novelSlug) {
@@ -205,6 +231,7 @@ export function getSettings(): ReaderSettings {
     delete (settings as Record<string, unknown>).autoClearChapters;
     delete (settings as Record<string, unknown>).autoClearChaptersKeep;
     delete (settings as Record<string, unknown>).autoLineBreak;
+    delete (settings as Record<string, unknown>).referenceLinks;
     // Migrate legacy single apiKey to openaiApiKey
     if (stored.apiKey && !stored.openaiApiKey) {
       settings.openaiApiKey = stored.apiKey;
@@ -306,4 +333,24 @@ export function getPendingWindow(): string | null {
 
 export function clearPendingWindow() {
   localStorage.removeItem(PENDING_WINDOW_KEY);
+}
+
+// The names a novel's translations use (see app/lib/glossary.ts)
+export function getGlossary(novelSlug: string): GlossaryTerm[] {
+  try {
+    const stored = JSON.parse(localStorage.getItem(GLOSSARY_KEY_PREFIX + novelSlug) || "[]");
+    return sanitizeTerms(Array.isArray(stored) ? stored.slice(0, MAX_STORED_TERMS) : []) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// Throws StorageFullError when browser storage is full
+export function saveGlossary(novelSlug: string, terms: GlossaryTerm[]) {
+  try {
+    if (terms.length === 0) localStorage.removeItem(GLOSSARY_KEY_PREFIX + novelSlug);
+    else localStorage.setItem(GLOSSARY_KEY_PREFIX + novelSlug, JSON.stringify(terms));
+  } catch (e) {
+    throw isQuotaError(e) ? new StorageFullError() : e;
+  }
 }

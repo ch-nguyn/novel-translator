@@ -50,7 +50,6 @@ export interface ReaderSettings {
   customPrompt: string;
   appLang: "en" | "vi";
   autoClearNovels: boolean;
-  referenceLinks: string;
   reasoningEffort: ReasoningEffort;
   webSearch: boolean;
 }
@@ -109,13 +108,34 @@ export interface TranslatedChapter {
   chapterName: string;
   prevUrl: string | null;
   nextUrl: string | null;
+  // Names found in this chapter that the novel's glossary did not have yet
+  newTerms?: GlossaryTerm[];
+}
+
+export type TermKind = "character" | "place" | "organization" | "skill" | "item" | "other";
+export const TERM_KINDS: TermKind[] = ["character", "place", "organization", "skill", "item", "other"];
+
+// A name in a novel's glossary, translated the same way in every chapter
+export interface GlossaryTerm {
+  // As written in the original text; empty for a name the user corrected
+  // that was never listed (it can then only be fixed in saved chapters)
+  source: string;
+  // As written in the translation
+  target: string;
+  kind: TermKind;
+  gender?: "male" | "female";
+  // Other ways translations wrote it; replaced by `target` when a chapter is saved
+  aliases?: string[];
+  // The chapter it was found in
+  firstSeen?: string;
+  // Set or corrected by the user, so never changed by a translation
+  edited?: boolean;
 }
 
 export interface TranslateOptions {
   apiKey: string;
   model: string;
   customPrompt?: string;
-  referenceLinks?: string;
   reasoningEffort?: string;
   webSearch?: boolean;
 }
@@ -138,7 +158,6 @@ export function getTranslateOptions(settings: ReaderSettings): TranslateOptions 
     apiKey: getApiKeyForModel(settings),
     model: settings.aiModel,
     customPrompt: settings.customPrompt,
-    referenceLinks: settings.referenceLinks,
     reasoningEffort: settings.reasoningEffort,
     webSearch: isOpenAIReasoningModel(settings.aiModel) ? settings.webSearch : false,
   };

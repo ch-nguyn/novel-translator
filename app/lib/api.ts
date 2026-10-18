@@ -1,4 +1,6 @@
-import { TranslatedChapter, TranslateOptions, ZH_TITLE_PROMPT } from "./types";
+import { GlossaryTerm, TranslatedChapter, TranslateOptions, ZH_TITLE_PROMPT } from "./types";
+import { promptTerms } from "./glossary";
+import { extractNovelSlug, getGlossary } from "./storage";
 import { parseTranslationStream, STREAM_NONCE_HEADER } from "./stream";
 
 // Pricing per million tokens: [input, output] in USD
@@ -140,14 +142,14 @@ export async function simplifyText(
   signal?: AbortSignal,
   onChunk?: (accumulated: string) => void,
   customPrompt?: string,
-  referenceLinks?: string,
+  glossary?: GlossaryTerm[],
   reasoningEffort?: string,
   webSearch?: boolean
 ): Promise<string> {
   const res = await fetch("/api/simplify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, apiKey, model, lang: lang || "vi", customPrompt, referenceLinks, reasoningEffort, webSearch }),
+    body: JSON.stringify({ text, apiKey, model, lang: lang || "vi", customPrompt, glossary, reasoningEffort, webSearch }),
     signal,
   });
 
@@ -190,6 +192,31 @@ export async function simplifyText(
   return result;
 }
 
+// The names `translation` introduced that `known` does not have yet. Never
+// throws: the chapter is complete without them.
+export async function extractChapterTerms(
+  url: string,
+  source: string,
+  translation: string,
+  known: GlossaryTerm[],
+  options: TranslateOptions,
+  signal?: AbortSignal
+): Promise<GlossaryTerm[]> {
+  try {
+    const res = await fetch("/api/glossary/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, source, translation, known: promptTerms(known), apiKey: options.apiKey, model: options.model }),
+      signal,
+    });
+    if (!res.ok) return [];
+    const { terms } = await res.json();
+    return Array.isArray(terms) ? terms : [];
+  } catch {
+    return [];
+  }
+}
+
 export type ChapterMeta = Omit<TranslatedChapter, "text">;
 
 // Fetches and translates a chapter in this browser tab (used when background jobs are unavailable)
@@ -202,6 +229,7 @@ export async function translateChapterDirect(
 ): Promise<TranslatedChapter> {
   const data = await fetchChapterContent(url, signal);
   onMeta(data);
+  const glossary = getGlossary(extractNovelSlug(url));
 
   const text = await simplifyText(
     data.text,
@@ -211,19 +239,24 @@ export async function translateChapterDirect(
     signal,
     onText,
     options.customPrompt,
-    options.referenceLinks,
+    promptTerms(glossary),
     options.reasoningEffort,
     options.webSearch
   );
 
   let { title, novelName, chapterName } = data;
-  // Translate title if Chinese (single API call for both titles)
-  if (data.lang === "zh" && chapterName) {
-    const translated = await translateTitles([chapterName, novelName], options.apiKey, options.model, ZH_TITLE_PROMPT);
+  const [translated, newTerms] = await Promise.all([
+    // Both titles in a single call
+    data.lang === "zh" && chapterName
+      ? translateTitles([chapterName, novelName], options.apiKey, options.model, ZH_TITLE_PROMPT)
+      : null,
+    extractChapterTerms(url, data.text, text, glossary, options, signal),
+  ]);
+  if (translated) {
     chapterName = translated[0] || chapterName;
     novelName = translated[1] || novelName;
     title = chapterName;
   }
 
-  return { text, title, novelName, chapterName, prevUrl: data.prevUrl, nextUrl: data.nextUrl };
+  return { text, title, novelName, chapterName, prevUrl: data.prevUrl, nextUrl: data.nextUrl, newTerms };
 }

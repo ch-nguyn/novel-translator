@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
-import { DEFAULT_AI_MODEL, SavedChapter, ReaderSettings, TranslatedChapter, TranslateOptions, getTextColor, getApiKeyForModel, getTranslateOptions } from "./lib/types";
+import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { DEFAULT_AI_MODEL, GlossaryTerm, SavedChapter, ReaderSettings, TranslatedChapter, TranslateOptions, getTextColor, getApiKeyForModel, getTranslateOptions } from "./lib/types";
 import {
   getSavedChapters,
   saveChapter,
@@ -20,7 +20,11 @@ import {
   StorageFullError,
   getPendingWindow,
   clearPendingWindow,
+  getGlossary,
+  isGlossaryStorageKey,
 } from "./lib/storage";
+import { applyNames, editTerm, renameTerm, termKey } from "./lib/glossary";
+import { exportGlossary, importGlossary, scanSavedChapters, SCAN_CHAPTERS, updateGlossary } from "./lib/glossaryActions";
 import { ChapterMeta, fetchChapterContent, fetchFirstChapterUrl, translateChapterDirect } from "./lib/api";
 import { bookPageUrl, normalizeEnteredUrl } from "./lib/sites";
 import {
@@ -43,6 +47,8 @@ import SavedChaptersList from "./components/SavedChaptersList";
 import SavedNovelsList from "./components/SavedNovelsList";
 import NavButtons from "./components/NavButtons";
 import ContactPanel from "./components/ContactPanel";
+import GlossaryPanel, { TermChange } from "./components/GlossaryPanel";
+import RenameDialog from "./components/RenameDialog";
 import Sheet, { TabPanel, Tabs } from "./components/Sheet";
 import Popover from "./components/Popover";
 import { ListIcon, PlusIcon, SettingsIcon, TypeIcon } from "./components/Icons";
@@ -51,7 +57,7 @@ import { getTranslations } from "./lib/i18n";
 // What is open over the page: the chapter/novel lists, the settings, or a
 // header dropdown (new novel link, display options)
 type Overlay = "none" | "library" | "settings" | "new" | "display";
-type LibraryTab = "chapters" | "novels";
+type LibraryTab = "chapters" | "names" | "novels";
 type SettingsTab = "ai" | "general" | "contact";
 
 function HeaderButton({
@@ -119,15 +125,24 @@ export default function Home() {
     customPrompt: "",
     appLang: "vi",
     autoClearNovels: false,
-    referenceLinks: "",
     reasoningEffort: "medium",
     webSearch: false,
   });
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [autoTranslating, setAutoTranslating] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  // Bumped when the glossary changes without a chapter being saved
+  const [glossaryVersion, setGlossaryVersion] = useState(0);
+  // A name selected in the chapter, offered for renaming, and the one being renamed
+  const [selectedName, setSelectedName] = useState<{ text: string; top: number; left: number } | null>(null);
+  const [renameFrom, setRenameFrom] = useState<string | null>(null);
+  const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
+  const [glossaryMessage, setGlossaryMessage] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const scanAbortRef = useRef<AbortController | null>(null);
   const autoModeRef = useRef(false);
+  const textRef = useRef<HTMLDivElement>(null);
+  const loadingRef = useRef(false);
   const t = getTranslations(settings.appLang);
 
   const currentNovelSlug = url ? extractNovelSlug(url) : null;
@@ -135,6 +150,15 @@ export default function Home() {
   const currentNovelChapters = currentNovelSlug
     ? savedChapters.filter((c) => c.novelSlug === currentNovelSlug)
     : [];
+
+  const glossary = useMemo(
+    () => (currentNovelSlug ? getGlossary(currentNovelSlug) : []),
+    // Saving a chapter (which updates savedChapters) may add names to the glossary
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentNovelSlug, savedChapters, glossaryVersion]
+  );
+  // Names first found in the open chapter
+  const chapterNewTerms = url ? glossary.filter((term) => term.firstSeen === url) : [];
 
   useEffect(() => {
     setSavedChapters(getSavedChapters());
@@ -262,11 +286,52 @@ export default function Home() {
     return () => window.removeEventListener("scroll", handleScroll);
   }, []);
 
+  // Another tab saved chapters or changed names: show them here too
+  useEffect(() => {
+    const handleStorage = (e: StorageEvent) => {
+      if (!isGlossaryStorageKey(e.key)) return;
+      refreshSaved();
+      setGlossaryVersion((v) => v + 1);
+      const shown = getCurrentUrl();
+      if (shown) showGlossaryNames(extractNovelSlug(shown));
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Offers to rename a name the user selects in the chapter
+  useEffect(() => {
+    const update = () => {
+      const selection = document.getSelection();
+      const container = textRef.current;
+      if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !container) return setSelectedName(null);
+      if (!container.contains(selection.anchorNode) || !container.contains(selection.focusNode)) return setSelectedName(null);
+      // Without surrounding punctuation or spaces
+      const text = selection.toString().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+      if (!text || text.length > 60 || /\n/.test(text)) return setSelectedName(null);
+      const rect = selection.getRangeAt(0).getBoundingClientRect();
+      const left = Math.min(Math.max(rect.left + rect.width / 2, 70), window.innerWidth - 70);
+      setSelectedName({ text, top: rect.bottom + 10, left });
+    };
+    document.addEventListener("selectionchange", update);
+    window.addEventListener("scroll", update, { passive: true });
+    return () => {
+      document.removeEventListener("selectionchange", update);
+      window.removeEventListener("scroll", update);
+    };
+  }, []);
+
   function toggleOverlay(next: Overlay) {
     setOverlay((prev) => (prev === next ? "none" : next));
   }
 
-  function openLibrary() {
+  function openLibrary(tab?: LibraryTab) {
+    if (tab) {
+      setLibraryTab(tab);
+      setOverlay("library");
+      return;
+    }
     if (overlay !== "library") setLibraryTab(currentNovelChapters.length > 0 ? "chapters" : "novels");
     toggleOverlay("library");
   }
@@ -356,10 +421,11 @@ export default function Home() {
       if (fromJob) await acknowledgeJobChapters([fetchUrl]);
       // Deleted while translating, or the user opened another chapter meanwhile
       if (!saved || controller.signal.aborted) return null;
-      const { title: savedTitle, evicted } = saved;
+      const { text: savedText, title: savedTitle, evicted } = saved;
       if (evicted) setNotice({ kind: "evicted", count: evicted });
 
-      setSimplifiedText(chapter.text);
+      // With the names written the way the glossary does
+      setSimplifiedText(savedText);
       setNovelName(chapter.novelName);
       setChapterName(savedTitle);
       setTitle(savedTitle);
@@ -532,6 +598,8 @@ export default function Home() {
 
     await withStorageLock(() => clearNovelChapters(novelSlug));
     discardNovelJobs(novelSlug);
+    // It would write the deleted novel's names back
+    if (currentNovelSlug === novelSlug) scanAbortRef.current?.abort();
     refreshSaved();
     if (url && extractNovelSlug(url) === novelSlug) {
       // Stop translating it (and auto mode), so it is not saved back
@@ -548,7 +616,85 @@ export default function Home() {
     }
   }
 
+  // After the glossary changed: the open chapter (unless still translating,
+  // which is fixed when it is saved) shows the names as corrected
+  function showGlossaryNames(novelSlug: string) {
+    const shown = getCurrentUrl();
+    if (loadingRef.current || !shown || extractNovelSlug(shown) !== novelSlug) return;
+    const terms = getGlossary(novelSlug);
+    setSimplifiedText((text) => applyNames(text, terms));
+  }
+
+  // Runs a change to the open novel's glossary, which also rewrites its saved chapters
+  async function changeGlossary(change: (terms: GlossaryTerm[]) => GlossaryTerm[]) {
+    if (!currentNovelSlug) return;
+    try {
+      await updateGlossary(currentNovelSlug, change);
+    } catch (e: unknown) {
+      if (e instanceof StorageFullError) setNotice({ kind: "storageFull" });
+      else if (e instanceof Error) setNotice({ kind: "error", message: e.message });
+    }
+    showGlossaryNames(currentNovelSlug);
+    refreshSaved();
+    setGlossaryVersion((v) => v + 1);
+  }
+
+  function handleRename(from: string, to: string) {
+    setRenameFrom(null);
+    changeGlossary((terms) => renameTerm(terms, from, to));
+  }
+
+  function handleTermChange(term: GlossaryTerm, change: TermChange) {
+    changeGlossary((terms) => editTerm(terms, termKey(term), term.target, change));
+  }
+
+  function handleTermDelete(term: GlossaryTerm) {
+    changeGlossary((terms) => terms.filter((t) => termKey(t) !== termKey(term)));
+  }
+
+  async function handleScan() {
+    if (!currentNovelSlug || scan) return;
+    const novelSlug = currentNovelSlug;
+    const controller = new AbortController();
+    scanAbortRef.current = controller;
+    setGlossaryMessage(null);
+    setScan({ done: 0, total: 0 });
+    try {
+      const added = await scanSavedChapters(
+        novelSlug,
+        getTranslateOptions(settings),
+        (done, total) => {
+          setScan({ done, total });
+          setGlossaryVersion((v) => v + 1);
+        },
+        controller.signal
+      );
+      setGlossaryMessage(t.scanDone.replace("{n}", String(added)));
+    } finally {
+      scanAbortRef.current = null;
+      setScan(null);
+      showGlossaryNames(novelSlug);
+      refreshSaved();
+      setGlossaryVersion((v) => v + 1);
+    }
+  }
+
+  async function handleImport(file: File) {
+    if (!currentNovelSlug) return;
+    setGlossaryMessage(null);
+    try {
+      const count = await importGlossary(currentNovelSlug, file);
+      setGlossaryMessage(count === null ? t.importFailed : t.importDone.replace("{n}", String(count)));
+    } catch (e: unknown) {
+      if (e instanceof StorageFullError) setNotice({ kind: "storageFull" });
+    }
+    showGlossaryNames(currentNovelSlug);
+    refreshSaved();
+    setGlossaryVersion((v) => v + 1);
+  }
+
   const isLoading = fetching || simplifying;
+  loadingRef.current = isLoading;
   const hasApiKey = !!getApiKeyForModel(settings)?.trim();
   // Saved chapters open without an API key; new ones need one to be translated
   const canNavigate = (target: string) =>
@@ -625,7 +771,7 @@ export default function Home() {
           <HeaderButton
             label={t.library}
             icon={<ListIcon />}
-            onClick={openLibrary}
+            onClick={() => openLibrary()}
             active={overlay === "library"}
             textColor={textColor}
             showLabel
@@ -685,6 +831,18 @@ export default function Home() {
                   <p className="text-sm mt-1" style={{ color: textColor + "80" }}>{chapterName}</p>
                 )}
                 {!novelName && !chapterName && title && <h1 className="text-lg font-semibold">{title}</h1>}
+                {!isLoading && chapterNewTerms.length > 0 && (
+                  <button
+                    onClick={() => openLibrary("names")}
+                    className="mt-2 max-w-full truncate text-xs cursor-pointer hover:underline"
+                    style={{ color: textColor + "80" }}
+                  >
+                    ✓{" "}
+                    {t.newNames
+                      .replace("{n}", String(chapterNewTerms.length))
+                      .replace("{list}", chapterNewTerms.slice(0, 4).map((term) => term.target).join(", ") + (chapterNewTerms.length > 4 ? "…" : ""))}
+                  </button>
+                )}
               </div>
             )}
 
@@ -693,6 +851,7 @@ export default function Home() {
             <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} canNavigate={canNavigate} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={navigateToChapter} />
 
             <div
+              ref={textRef}
               className="min-h-[60vh] px-1 sm:px-2 py-4 whitespace-pre-wrap"
               style={{ fontSize: `${settings.fontSize}px`, lineHeight: settings.lineSpacing }}
             >
@@ -737,6 +896,33 @@ export default function Home() {
           </svg>
         </button>
       )}
+      {selectedName && !isLoading && overlay === "none" && !renameFrom && currentNovelSlug && (
+        <button
+          // Keeps the selection while pressing
+          onPointerDown={(e) => e.preventDefault()}
+          onClick={() => {
+            setRenameFrom(selectedName.text);
+            document.getSelection()?.removeAllRanges();
+          }}
+          className="fixed z-30 -translate-x-1/2 px-3 py-1.5 rounded-full shadow-lg text-sm font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
+          style={{ top: selectedName.top, left: selectedName.left }}
+        >
+          ✎ {t.renameName}
+        </button>
+      )}
+
+      {renameFrom && (
+        <RenameDialog
+          from={renameFrom}
+          source={glossary.find((term) => term.target === renameFrom)?.source}
+          t={t}
+          textColor={textColor}
+          bgColor={settings.bgColor}
+          onRename={(to) => handleRename(renameFrom, to)}
+          onClose={() => setRenameFrom(null)}
+        />
+      )}
+
       {overlay === "library" && (
         <Sheet
           side="left"
@@ -750,6 +936,7 @@ export default function Home() {
               idPrefix="library"
               tabs={[
                 { id: "chapters", label: `${t.chapters} (${currentNovelChapters.length})` },
+                { id: "names", label: `${t.names} (${glossary.length})` },
                 { id: "novels", label: t.novels },
               ]}
               active={libraryTab}
@@ -767,6 +954,24 @@ export default function Home() {
                 currentUrl={url}
                 t={t}
                 onLoad={loadSavedChapter}
+              />
+            ) : libraryTab === "names" ? (
+              <GlossaryPanel
+                terms={glossary}
+                textColor={textColor}
+                bgColor={settings.bgColor}
+                t={t}
+                novelSlug={nothingOpen ? null : currentNovelSlug}
+                canScan={hasApiKey && currentNovelChapters.length > 0}
+                scanChapters={Math.min(SCAN_CHAPTERS, currentNovelChapters.length)}
+                scan={scan}
+                message={glossaryMessage}
+                onChange={handleTermChange}
+                onDelete={handleTermDelete}
+                onScan={handleScan}
+                onStopScan={() => scanAbortRef.current?.abort()}
+                onExport={() => currentNovelSlug && exportGlossary(currentNovelSlug, novelName)}
+                onImport={handleImport}
               />
             ) : (
               <SavedNovelsList
