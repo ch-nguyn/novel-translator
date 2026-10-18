@@ -126,7 +126,7 @@ export default function Home() {
     appLang: "vi",
     autoClearNovels: false,
     reasoningEffort: "medium",
-    webSearch: false,
+    autoGlossary: true,
   });
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [autoTranslating, setAutoTranslating] = useState(false);
@@ -831,7 +831,7 @@ export default function Home() {
                   <p className="text-sm mt-1" style={{ color: textColor + "80" }}>{chapterName}</p>
                 )}
                 {!novelName && !chapterName && title && <h1 className="text-lg font-semibold">{title}</h1>}
-                {!isLoading && chapterNewTerms.length > 0 && (
+                {settings.autoGlossary && !isLoading && chapterNewTerms.length > 0 && (
                   <button
                     onClick={() => openLibrary("names")}
                     className="mt-2 max-w-full truncate text-xs cursor-pointer hover:underline"
@@ -896,7 +896,7 @@ export default function Home() {
           </svg>
         </button>
       )}
-      {selectedName && !isLoading && overlay === "none" && !renameFrom && currentNovelSlug && (
+      {settings.autoGlossary && selectedName && !isLoading && overlay === "none" && !renameFrom && currentNovelSlug && (
         <button
           // Keeps the selection while pressing
           onPointerDown={(e) => e.preventDefault()}
@@ -962,12 +962,15 @@ export default function Home() {
                 bgColor={settings.bgColor}
                 t={t}
                 novelSlug={nothingOpen ? null : currentNovelSlug}
+                enabled={settings.autoGlossary}
+                onToggle={(autoGlossary) => updateSettings({ autoGlossary })}
                 canScan={hasApiKey && currentNovelChapters.length > 0}
                 scanChapters={Math.min(SCAN_CHAPTERS, currentNovelChapters.length)}
                 scan={scan}
                 message={glossaryMessage}
                 onChange={handleTermChange}
                 onDelete={handleTermDelete}
+                onClearAll={() => changeGlossary(() => [])}
                 onScan={handleScan}
                 onStopScan={() => scanAbortRef.current?.abort()}
                 onExport={() => currentNovelSlug && exportGlossary(currentNovelSlug, novelName)}

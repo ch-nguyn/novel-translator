@@ -4,7 +4,7 @@ import { sanitizeTerms } from "../../lib/glossary";
 
 export async function POST(req: Request) {
   try {
-    const { text, apiKey, model, lang, customPrompt, glossary, reasoningEffort, webSearch } = await req.json();
+    const { text, apiKey, model, lang, customPrompt, glossary, reasoningEffort } = await req.json();
 
     if (!text || typeof text !== "string") {
       return Response.json({ error: "Missing text" }, { status: 400 });
@@ -30,7 +30,6 @@ export async function POST(req: Request) {
       customPrompt,
       glossary: terms,
       reasoningEffort,
-      webSearch,
     });
 
     return new Response(stream, {

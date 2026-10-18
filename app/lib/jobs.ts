@@ -75,7 +75,7 @@ export async function startBackgroundJob(
   // Before the request: the app may be closed before the response arrives
   if (remember) setPendingWindow(url);
 
-  const glossary = promptTerms(getGlossary(extractNovelSlug(url)));
+  const glossary = options.useGlossary === false ? [] : promptTerms(getGlossary(extractNovelSlug(url)));
   const body = JSON.stringify({ deviceId: getDeviceId(), url, known, force, glossary, ...options });
   const res = await fetch("/api/jobs", {
     method: "POST",
@@ -250,16 +250,20 @@ export function saveTranslatedChapter(
   chapter: TranslatedChapter
 ): { text: string; title: string; evicted: number } {
   const novelSlug = extractNovelSlug(url);
-  const known = getGlossary(novelSlug);
-  const glossary = mergeTerms(known, chapter.newTerms ?? []);
-  if (glossary !== known) {
-    try {
-      saveGlossary(novelSlug, glossary);
-    } catch {
-      // Storage is full: the chapter itself matters more; its names are lost
+  let text = chapter.text;
+  // Unless the user turned the glossary off
+  if (getSettings().autoGlossary) {
+    const known = getGlossary(novelSlug);
+    const glossary = mergeTerms(known, chapter.newTerms ?? []);
+    if (glossary !== known) {
+      try {
+        saveGlossary(novelSlug, glossary);
+      } catch {
+        // Storage is full: the chapter itself matters more; its names are lost
+      }
     }
+    text = applyNames(chapter.text, glossary);
   }
-  const text = applyNames(chapter.text, glossary);
   const others = getSavedChapters().filter((c) => c.url !== url);
   const title = deduplicateTitle(chapter.chapterName || chapter.title || url, novelSlug, others);
   const evicted = saveChapter({

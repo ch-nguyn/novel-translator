@@ -96,7 +96,6 @@ interface ProviderRequest {
   text: string;
   systemPrompt: string;
   effort: ReasoningEffort;
-  webSearch: boolean;
   signal?: AbortSignal;
   // Authenticates the stream's terminal record (see app/lib/stream.ts)
   nonce: string;
@@ -221,7 +220,7 @@ function sseToTextStream(
   });
 }
 
-async function streamOpenAIResponses({ apiKey, model, text, systemPrompt, effort, webSearch, signal, nonce }: ProviderRequest) {
+async function streamOpenAIResponses({ apiKey, model, text, systemPrompt, effort, signal, nonce }: ProviderRequest) {
   const res = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -234,7 +233,6 @@ async function streamOpenAIResponses({ apiKey, model, text, systemPrompt, effort
       input: text,
       stream: true,
       reasoning: { effort },
-      ...(webSearch ? { tools: [{ type: "web_search" }] } : {}),
     }),
     signal,
   });
@@ -322,7 +320,7 @@ function geminiThinkingBudget(effort: ReasoningEffort): number {
   }
 }
 
-async function streamGemini({ apiKey, model, text, systemPrompt, effort, webSearch, signal, nonce }: ProviderRequest) {
+async function streamGemini({ apiKey, model, text, systemPrompt, effort, signal, nonce }: ProviderRequest) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:streamGenerateContent?alt=sse`;
 
   const res = await fetch(url, {
@@ -335,7 +333,6 @@ async function streamGemini({ apiKey, model, text, systemPrompt, effort, webSear
         temperature: 0.3,
         thinkingConfig: { thinkingBudget: geminiThinkingBudget(effort) },
       },
-      ...(webSearch ? { tools: [{ googleSearch: {} }] } : {}),
     }),
     signal,
   });
@@ -364,7 +361,7 @@ async function streamGemini({ apiKey, model, text, systemPrompt, effort, webSear
 // Anthropic stop reasons that mean the model finished its answer
 const CLAUDE_FINISHED = new Set(["end_turn", "stop_sequence"]);
 
-async function streamClaude({ apiKey, model, text, systemPrompt, webSearch, signal, nonce }: ProviderRequest) {
+async function streamClaude({ apiKey, model, text, systemPrompt, signal, nonce }: ProviderRequest) {
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -380,7 +377,6 @@ async function streamClaude({ apiKey, model, text, systemPrompt, webSearch, sign
       system: systemPrompt,
       messages: [{ role: "user", content: text }],
       thinking: { type: "enabled", budget_tokens: 4000 },
-      ...(webSearch ? { tools: [{ type: "web_search_20250305", name: "web_search" }] } : {}),
     }),
     signal,
   });
@@ -423,7 +419,6 @@ export interface SimplifyParams {
   // The novel's glossary; the names appearing in `text` are added to the prompt
   glossary?: GlossaryTerm[];
   reasoningEffort?: string;
-  webSearch?: boolean;
   // Aborts the provider request
   signal?: AbortSignal;
 }
@@ -444,7 +439,6 @@ export async function createSimplifyStream({
   customPrompt,
   glossary,
   reasoningEffort,
-  webSearch,
   signal,
 }: SimplifyParams): Promise<SimplifyStream> {
   const resolvedModel = model || DEFAULT_AI_MODEL;
@@ -460,7 +454,7 @@ export async function createSimplifyStream({
   if (glossary) systemPrompt += glossaryPrompt(glossary, text);
 
   const nonce = newStreamNonce();
-  const request: ProviderRequest = { apiKey, model: resolvedModel, text, systemPrompt, effort, webSearch: !!webSearch, signal, nonce };
+  const request: ProviderRequest = { apiKey, model: resolvedModel, text, systemPrompt, effort, signal, nonce };
   let stream: ReadableStream;
   switch (provider) {
     case "gemini":

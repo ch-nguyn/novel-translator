@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ReaderSettings, AI_MODEL_OPTIONS, REASONING_EFFORT_OPTIONS, ReasoningEffort, getProviderForModel, isOpenAIReasoningModel } from "../lib/types";
 import { Translations } from "../lib/i18n";
+import Switch from "./Switch";
 
 interface Props {
   settings: ReaderSettings;
@@ -59,12 +60,8 @@ export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Pr
   }, [modelMenuOpen]);
 
   function updateModel(model: string) {
-    onUpdate({ aiModel: model, ...(isOpenAIReasoningModel(model) ? {} : { webSearch: false }) });
+    onUpdate({ aiModel: model });
     setModelMenuOpen(false);
-  }
-
-  function toggleWebSearch() {
-    onUpdate({ webSearch: !settings.webSearch });
   }
 
   return (
@@ -92,7 +89,7 @@ export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Pr
               onFocus={() => setModelMenuOpen(true)}
               onChange={(e) => {
                 const model = e.target.value;
-                onUpdate({ aiModel: model, ...(isOpenAIReasoningModel(model) ? {} : { webSearch: false }) });
+                onUpdate({ aiModel: model });
                 setModelMenuOpen(true);
               }}
               placeholder={t.aiModelPlaceholder}
@@ -157,28 +154,13 @@ export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Pr
         </p>
       </div>
 
-      {isChatGPT && <div>
-        <button
-          role="switch"
-          aria-checked={settings.webSearch}
-          onClick={toggleWebSearch}
-          className="w-full flex items-center justify-between gap-3 text-left cursor-pointer"
-        >
-          <span className="text-sm font-medium">{t.webSearch}</span>
-          <span
-            className="relative w-11 h-6 rounded-full shrink-0 transition-colors duration-200"
-            style={{ backgroundColor: settings.webSearch ? "#3b82f6" : textColor + "20" }}
-          >
-            <span
-              className="absolute top-0.5 left-0 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
-              style={{ transform: settings.webSearch ? "translateX(22px)" : "translateX(2px)" }}
-            />
-          </span>
-        </button>
-        <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
-          {t.webSearchNote}
-        </p>
-      </div>}
+      <Switch
+        label={t.autoGlossary}
+        checked={settings.autoGlossary}
+        onChange={(autoGlossary) => onUpdate({ autoGlossary })}
+        textColor={textColor}
+        note={t.autoGlossaryNote}
+      />
 
       {isChatGPT && <div>
         <label className="text-sm font-medium block mb-2">{t.reasoningEffort}</label>

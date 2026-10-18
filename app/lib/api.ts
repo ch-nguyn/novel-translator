@@ -143,13 +143,12 @@ export async function simplifyText(
   onChunk?: (accumulated: string) => void,
   customPrompt?: string,
   glossary?: GlossaryTerm[],
-  reasoningEffort?: string,
-  webSearch?: boolean
+  reasoningEffort?: string
 ): Promise<string> {
   const res = await fetch("/api/simplify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, apiKey, model, lang: lang || "vi", customPrompt, glossary, reasoningEffort, webSearch }),
+    body: JSON.stringify({ text, apiKey, model, lang: lang || "vi", customPrompt, glossary, reasoningEffort }),
     signal,
   });
 
@@ -229,7 +228,8 @@ export async function translateChapterDirect(
 ): Promise<TranslatedChapter> {
   const data = await fetchChapterContent(url, signal);
   onMeta(data);
-  const glossary = getGlossary(extractNovelSlug(url));
+  const useGlossary = options.useGlossary !== false;
+  const glossary = useGlossary ? getGlossary(extractNovelSlug(url)) : [];
 
   const text = await simplifyText(
     data.text,
@@ -240,8 +240,7 @@ export async function translateChapterDirect(
     onText,
     options.customPrompt,
     promptTerms(glossary),
-    options.reasoningEffort,
-    options.webSearch
+    options.reasoningEffort
   );
 
   let { title, novelName, chapterName } = data;
@@ -250,7 +249,7 @@ export async function translateChapterDirect(
     data.lang === "zh" && chapterName
       ? translateTitles([chapterName, novelName], options.apiKey, options.model, ZH_TITLE_PROMPT)
       : null,
-    extractChapterTerms(url, data.text, text, glossary, options, signal),
+    useGlossary ? extractChapterTerms(url, data.text, text, glossary, options, signal) : [],
   ]);
   if (translated) {
     chapterName = translated[0] || chapterName;

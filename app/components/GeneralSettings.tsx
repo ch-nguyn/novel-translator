@@ -3,6 +3,7 @@
 import { ReaderSettings } from "../lib/types";
 import { Translations } from "../lib/i18n";
 import DisplaySettings from "./DisplaySettings";
+import Switch from "./Switch";
 
 interface Props {
   settings: ReaderSettings;
@@ -27,23 +28,12 @@ export default function GeneralSettings({ settings, textColor, t, onUpdate }: Pr
         </select>
       </div>
 
-      <button
-        role="switch"
-        aria-checked={settings.autoClearNovels}
-        onClick={() => onUpdate({ autoClearNovels: !settings.autoClearNovels })}
-        className="flex items-center justify-between gap-3 text-left cursor-pointer"
-      >
-        <span className="text-sm font-medium">{t.autoClearNovels}</span>
-        <span
-          className="relative w-11 h-6 rounded-full shrink-0 transition-colors duration-200"
-          style={{ backgroundColor: settings.autoClearNovels ? "#3b82f6" : textColor + "20" }}
-        >
-          <span
-            className="absolute top-0.5 left-0 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
-            style={{ transform: settings.autoClearNovels ? "translateX(22px)" : "translateX(2px)" }}
-          />
-        </span>
-      </button>
+      <Switch
+        label={t.autoClearNovels}
+        checked={settings.autoClearNovels}
+        onChange={(autoClearNovels) => onUpdate({ autoClearNovels })}
+        textColor={textColor}
+      />
 
       <div className="border-t pt-5" style={{ borderColor: textColor + "15" }}>
         <p className="text-sm font-semibold mb-4">{t.display}</p>

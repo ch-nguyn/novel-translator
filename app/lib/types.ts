@@ -51,7 +51,8 @@ export interface ReaderSettings {
   appLang: "en" | "vi";
   autoClearNovels: boolean;
   reasoningEffort: ReasoningEffort;
-  webSearch: boolean;
+  // Remember the novel's names and translate them the same way in every chapter
+  autoGlossary: boolean;
 }
 
 export function getProviderForModel(model: string): AIProvider {
@@ -63,7 +64,7 @@ export function getProviderForModel(model: string): AIProvider {
 }
 
 // OpenAI reasoning models (GPT-5 and later, o-series). They go through the
-// Responses API, support reasoning effort and web search, and reject any
+// Responses API, support reasoning effort, and reject any
 // temperature other than the default.
 export function isOpenAIReasoningModel(model: string): boolean {
   if (getProviderForModel(model) !== "openai") return false;
@@ -137,7 +138,8 @@ export interface TranslateOptions {
   model: string;
   customPrompt?: string;
   reasoningEffort?: string;
-  webSearch?: boolean;
+  // Off: no glossary in the prompt and no names extracted
+  useGlossary?: boolean;
 }
 
 // "saved": the device already saved it; only a receipt (with nextUrl) is kept
@@ -159,6 +161,6 @@ export function getTranslateOptions(settings: ReaderSettings): TranslateOptions 
     model: settings.aiModel,
     customPrompt: settings.customPrompt,
     reasoningEffort: settings.reasoningEffort,
-    webSearch: isOpenAIReasoningModel(settings.aiModel) ? settings.webSearch : false,
+    useGlossary: settings.autoGlossary,
   };
 }

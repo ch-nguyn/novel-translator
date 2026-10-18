@@ -25,7 +25,7 @@ export async function POST(req: Request) {
   if (!db) return Response.json(NOT_CONFIGURED, { status: 501 });
 
   try {
-    const { deviceId, url, apiKey, model, customPrompt, glossary, reasoningEffort, webSearch, known, force } = await req.json();
+    const { deviceId, url, apiKey, model, customPrompt, glossary, useGlossary, reasoningEffort, known, force } = await req.json();
 
     if (!isValidDeviceId(deviceId)) {
       return Response.json({ error: "Invalid device id" }, { status: 400 });
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
         customPrompt,
         glossary: terms,
         reasoningEffort,
-        webSearch: !!webSearch,
+        useGlossary: useGlossary !== false,
       })
     );
 

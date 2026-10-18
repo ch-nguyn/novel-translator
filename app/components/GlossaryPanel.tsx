@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { GlossaryTerm, TERM_KINDS, TermKind } from "../lib/types";
 import { termKey } from "../lib/glossary";
 import { Translations } from "../lib/i18n";
+import Switch from "./Switch";
 
 export function kindLabel(kind: TermKind, t: Translations): string {
   const labels: Record<TermKind, string> = {
@@ -30,6 +31,9 @@ interface Props {
   t: Translations;
   // Null while no chapter is open
   novelSlug: string | null;
+  // The automatic glossary is on (a setting for every novel)
+  enabled: boolean;
+  onToggle: (enabled: boolean) => void;
   // Scanning saved chapters needs an API key and saved chapters
   canScan: boolean;
   scanChapters: number;
@@ -39,6 +43,7 @@ interface Props {
   message: string | null;
   onChange: (term: GlossaryTerm, change: TermChange) => void;
   onDelete: (term: GlossaryTerm) => void;
+  onClearAll: () => void;
   onScan: () => void;
   onStopScan: () => void;
   onExport: () => void;
@@ -52,12 +57,15 @@ export default function GlossaryPanel({
   bgColor,
   t,
   novelSlug,
+  enabled,
+  onToggle,
   canScan,
   scanChapters,
   scan,
   message,
   onChange,
   onDelete,
+  onClearAll,
   onScan,
   onStopScan,
   onExport,
@@ -70,11 +78,24 @@ export default function GlossaryPanel({
   const inputStyle = { backgroundColor: bgColor, borderColor: textColor + "30", color: textColor };
   const smallButton = "px-2.5 py-1.5 rounded-md border text-xs cursor-pointer hover:opacity-70 disabled:opacity-40 disabled:cursor-not-allowed";
 
+  const toggle = (
+    <Switch
+      label={t.autoGlossary}
+      checked={enabled}
+      onChange={onToggle}
+      textColor={textColor}
+      note={enabled ? t.namesHint : t.glossaryOff}
+    />
+  );
+
   if (!novelSlug) {
     return (
-      <p className="p-4 text-center text-sm" style={{ color: textColor + "60" }}>
-        {t.namesNoNovel}
-      </p>
+      <div className="flex flex-col gap-3">
+        {toggle}
+        <p className="p-4 text-center text-sm" style={{ color: textColor + "60" }}>
+          {t.namesNoNovel}
+        </p>
+      </div>
     );
   }
 
@@ -93,9 +114,7 @@ export default function GlossaryPanel({
 
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-xs" style={{ color: muted }}>
-        {t.namesHint}
-      </p>
+      {toggle}
 
       <div className="flex flex-wrap gap-2">
         {scan ? (
@@ -107,7 +126,7 @@ export default function GlossaryPanel({
         ) : (
           <button
             onClick={onScan}
-            disabled={!canScan}
+            disabled={!canScan || !enabled}
             title={t.scanNamesNote.replace("{n}", String(scanChapters))}
             className={smallButton}
             style={{ borderColor: textColor + "30" }}
@@ -120,6 +139,16 @@ export default function GlossaryPanel({
         </button>
         <button onClick={() => fileRef.current?.click()} className={smallButton} style={{ borderColor: textColor + "30" }}>
           {t.importNames}
+        </button>
+        <button
+          onClick={() => {
+            if (window.confirm(t.confirmClearNames.replace("{n}", String(terms.length)))) onClearAll();
+          }}
+          disabled={terms.length === 0 || !!scan}
+          className={smallButton + " text-red-500"}
+          style={{ borderColor: "#ef444460" }}
+        >
+          {t.clearAllNames}
         </button>
         <input
           ref={fileRef}

@@ -313,9 +313,8 @@ async function translateChapter(
       model: step.model,
       lang: content.lang,
       customPrompt: step.customPrompt,
-      glossary: step.glossary,
+      glossary: step.useGlossary === false ? undefined : step.glossary,
       reasoningEffort: step.reasoningEffort,
-      webSearch: step.webSearch,
       signal: lost.signal,
     });
 
@@ -346,14 +345,16 @@ async function translateChapter(
       content.lang === "zh" && chapterName
         ? translateTitleBatch(step.apiKey, step.model, [chapterName, novelName], ZH_TITLE_PROMPT).catch(() => null)
         : null,
-      extractTerms({
-        apiKey: step.apiKey,
-        model: step.model,
-        source: content.text,
-        translation: text,
-        known: step.glossary,
-        chapterUrl: url,
-      }),
+      step.useGlossary === false
+        ? []
+        : extractTerms({
+            apiKey: step.apiKey,
+            model: step.model,
+            source: content.text,
+            translation: text,
+            known: step.glossary,
+            chapterUrl: url,
+          }),
     ]);
     if (titles) {
       chapterName = titles[0] || chapterName;
@@ -407,7 +408,7 @@ export function signStep(step: JobStep): string {
     step.customPrompt ?? null,
     step.glossary ?? [],
     step.reasoningEffort ?? null,
-    step.webSearch ?? null,
+    step.useGlossary ?? null,
   ]);
   return createHmac("sha256", signingKey()).update(payload).digest("hex");
 }

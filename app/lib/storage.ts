@@ -35,7 +35,7 @@ const DEFAULT_SETTINGS: ReaderSettings = {
   appLang: "vi",
   autoClearNovels: false,
   reasoningEffort: "medium",
-  webSearch: false,
+  autoGlossary: true,
 };
 
 // Groups chapters by novel (e.g. biquuge.com/0/229/245181.html → biquuge-229)
@@ -232,6 +232,7 @@ export function getSettings(): ReaderSettings {
     delete (settings as Record<string, unknown>).autoClearChaptersKeep;
     delete (settings as Record<string, unknown>).autoLineBreak;
     delete (settings as Record<string, unknown>).referenceLinks;
+    delete (settings as Record<string, unknown>).webSearch;
     // Migrate legacy single apiKey to openaiApiKey
     if (stored.apiKey && !stored.openaiApiKey) {
       settings.openaiApiKey = stored.apiKey;
