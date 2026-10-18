@@ -1,6 +1,6 @@
 "use client";
 
-import { SavedChapter, ReaderSettings } from "../lib/types";
+import { SavedChapter } from "../lib/types";
 import { Translations } from "../lib/i18n";
 
 interface NovelInfo {
@@ -12,7 +12,6 @@ interface NovelInfo {
 
 interface Props {
   chapters: SavedChapter[];
-  settings: ReaderSettings;
   textColor: string;
   currentNovelSlug: string | null;
   t: Translations;
@@ -42,7 +41,6 @@ function getNovels(chapters: SavedChapter[]): NovelInfo[] {
 
 export default function SavedNovelsList({
   chapters,
-  settings,
   textColor,
   currentNovelSlug,
   t,
@@ -51,54 +49,45 @@ export default function SavedNovelsList({
 }: Props) {
   const novels = getNovels(chapters);
 
+  if (novels.length === 0) {
+    return (
+      <p className="p-4 text-center text-sm" style={{ color: textColor + "60" }}>
+        {t.noNovels}
+      </p>
+    );
+  }
+
   return (
-    <div
-      className="mb-4 rounded-lg border overflow-hidden"
-      style={{ borderColor: textColor + "20" }}
-    >
-      <div className="max-h-60 sm:max-h-64 overflow-auto">
-        {novels.length === 0 ? (
-          <p
-            className="p-4 text-center text-sm"
-            style={{ color: textColor + "60" }}
+    <ul>
+      {novels.map((novel) => {
+        const isActive = novel.slug === currentNovelSlug;
+        return (
+          <li
+            key={novel.slug}
+            className="flex items-center gap-2 rounded-lg"
+            style={{ backgroundColor: isActive ? "#3b82f620" : "transparent" }}
           >
-            {t.noNovels}
-          </p>
-        ) : (
-          novels.map((novel) => (
-            <div
-              key={novel.slug}
-              className="flex items-center justify-between px-3 sm:px-4 py-3 border-b last:border-b-0"
-              style={{
-                borderColor: textColor + "10",
-                backgroundColor:
-                  novel.slug === currentNovelSlug
-                    ? "#3b82f6" + "20"
-                    : "transparent",
-                borderLeft: novel.slug === currentNovelSlug
-                  ? "3px solid #3b82f6"
-                  : "3px solid transparent",
-              }}
+            <button
+              onClick={() => onSelectNovel(novel.slug)}
+              aria-current={isActive ? "true" : undefined}
+              className="text-left flex-1 min-w-0 cursor-pointer px-3 py-2.5 transition-colors hover:opacity-70"
             >
-              <button
-                onClick={() => onSelectNovel(novel.slug)}
-                className="text-left flex-1 cursor-pointer rounded-lg px-2 py-1 transition-colors hover:opacity-70"
-              >
-                <p className="text-sm font-medium" style={{ color: novel.slug === currentNovelSlug ? "#3b82f6" : undefined }}>{novel.name}</p>
-                <p className="text-xs" style={{ color: textColor + "60" }}>
-                  {novel.chapterCount} {t.chapters.toLowerCase()}
-                </p>
-              </button>
-              <button
-                onClick={() => onClearNovel(novel.slug)}
-                className="text-xs text-red-500 hover:text-red-700 cursor-pointer transition-colors"
-              >
-                {t.clear}
-              </button>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
+              <p className="text-sm font-medium truncate" style={{ color: isActive ? "#3b82f6" : undefined }}>
+                {novel.name}
+              </p>
+              <p className="text-xs" style={{ color: textColor + "60" }}>
+                {novel.chapterCount} {t.chapters.toLowerCase()}
+              </p>
+            </button>
+            <button
+              onClick={() => onClearNovel(novel.slug)}
+              className="shrink-0 px-3 py-2 text-xs text-red-500 hover:text-red-700 cursor-pointer transition-colors"
+            >
+              {t.clear}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

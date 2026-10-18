@@ -35,15 +35,54 @@ import {
   SyncResult,
   watchJobChapter,
 } from "./lib/jobs";
-import SettingsPanel from "./components/SettingsPanel";
 import AISettingsPanel from "./components/AISettingsPanel";
+import GeneralSettings from "./components/GeneralSettings";
+import DisplaySettings from "./components/DisplaySettings";
+import LinkForm from "./components/LinkForm";
 import SavedChaptersList from "./components/SavedChaptersList";
 import SavedNovelsList from "./components/SavedNovelsList";
 import NavButtons from "./components/NavButtons";
 import ContactPanel from "./components/ContactPanel";
+import Sheet, { TabPanel, Tabs } from "./components/Sheet";
+import Popover from "./components/Popover";
+import { ListIcon, PlusIcon, SettingsIcon, TypeIcon } from "./components/Icons";
 import { getTranslations } from "./lib/i18n";
 
-type Panel = "none" | "chapters" | "novels" | "settings" | "ai-settings" | "contact";
+// What is open over the page: the chapter/novel lists, the settings, or a
+// header dropdown (new novel link, display options)
+type Overlay = "none" | "library" | "settings" | "new" | "display";
+type LibraryTab = "chapters" | "novels";
+type SettingsTab = "ai" | "general" | "contact";
+
+function HeaderButton({
+  label,
+  icon,
+  onClick,
+  active,
+  textColor,
+  showLabel,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+  active: boolean;
+  textColor: string;
+  showLabel?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      aria-label={label}
+      aria-expanded={active}
+      title={label}
+      className="h-9 px-2.5 rounded-lg flex items-center gap-1.5 text-sm font-medium cursor-pointer transition-colors shrink-0 hover:opacity-70"
+      style={{ color: textColor, backgroundColor: active ? textColor + "18" : "transparent" }}
+    >
+      {icon}
+      {showLabel && <span className="hidden sm:inline">{label}</span>}
+    </button>
+  );
+}
 
 // Message shown above the chapter text
 type Notice =
@@ -64,7 +103,10 @@ export default function Home() {
   const [prevUrl, setPrevUrl] = useState<string | null>(null);
   const [nextUrl, setNextUrl] = useState<string | null>(null);
   const [savedChapters, setSavedChapters] = useState<SavedChapter[]>([]);
-  const [activePanel, setActivePanel] = useState<Panel>("none");
+  const [overlay, setOverlay] = useState<Overlay>("none");
+  const [libraryTab, setLibraryTab] = useState<LibraryTab>("chapters");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>("ai");
+  const [headerHidden, setHeaderHidden] = useState(false);
   const [settings, setSettings] = useState<ReaderSettings>({
     bgColor: "#f5f5dc",
     fontSize: 18,
@@ -105,6 +147,8 @@ export default function Home() {
       if (chapter) {
         setUrl(chapter.url);
         setTitle(chapter.title);
+        setNovelName(chapter.novelName || "");
+        setChapterName(chapter.title || "");
         setSimplifiedText(chapter.simplifiedText);
         setPrevUrl(chapter.prevUrl || null);
         setNextUrl(chapter.nextUrl || null);
@@ -203,9 +247,36 @@ export default function Home() {
     document.documentElement.lang = settings.appLang;
   }, [settings.appLang]);
 
-  function togglePanel(panel: Panel) {
-    setActivePanel((prev) => (prev === panel ? "none" : panel));
+  // The header slides away while reading down the chapter and returns on scrolling up
+  useEffect(() => {
+    let lastY = window.scrollY;
+    const handleScroll = () => {
+      const y = window.scrollY;
+      if (y < 80) setHeaderHidden(false);
+      else if (y > lastY + 8) setHeaderHidden(true);
+      else if (y < lastY - 8) setHeaderHidden(false);
+      else return; // ignore jitter, but let small moves add up
+      lastY = y;
+    };
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  function toggleOverlay(next: Overlay) {
+    setOverlay((prev) => (prev === next ? "none" : next));
   }
+
+  function openLibrary() {
+    if (overlay !== "library") setLibraryTab(currentNovelChapters.length > 0 ? "chapters" : "novels");
+    toggleOverlay("library");
+  }
+
+  function openSettings(tab?: SettingsTab) {
+    if (tab) setSettingsTab(tab);
+    setOverlay("settings");
+  }
+
+  const closeOverlay = () => setOverlay("none");
 
   function updateSettings(patch: Partial<ReaderSettings>) {
     const updated = { ...settings, ...patch };
@@ -390,7 +461,7 @@ export default function Home() {
     setSimplifiedText(chapter.simplifiedText);
     setPrevUrl(chapter.prevUrl || null);
     setNextUrl(chapter.nextUrl || null);
-    setActivePanel("none");
+    setOverlay("none");
     setCurrentUrl(chapter.url);
     // Restore scroll position after content renders
     requestAnimationFrame(() => {
@@ -431,7 +502,7 @@ export default function Home() {
 
     autoModeRef.current = true;
     setAutoTranslating(true);
-    setActivePanel("none");
+    setOverlay("none");
 
     let urlToProcess: string | null = await resolveEnteredUrl(url);
     const visited = new Set<string>();
@@ -469,6 +540,8 @@ export default function Home() {
       abortRef.current?.abort();
       setSimplifiedText("");
       setTitle("");
+      setNovelName("");
+      setChapterName("");
       setUrl("");
       setPrevUrl(null);
       setNextUrl(null);
@@ -486,269 +559,159 @@ export default function Home() {
       ? t.simplifying
       : t.translate;
   const textColor = getTextColor(settings.bgColor);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const btnStyle = { borderColor: textColor + "30", color: textColor, backgroundColor: settings.bgColor };
-  const btnClass = "panel-btn px-3 py-1.5 rounded-lg text-sm font-medium border transition-all cursor-pointer";
+  // Nothing opened yet (or the novel was deleted): the link form is the page
+  const nothingOpen = !simplifiedText && !title && !novelName && !chapterName && !isLoading;
 
-  function handleMenuAction(panel: Panel) {
-    togglePanel(panel);
-    setMenuOpen(false);
-  }
+  const linkForm = (autoFocus: boolean) => (
+    <LinkForm
+      t={t}
+      textColor={textColor}
+      url={url}
+      onUrlChange={setUrl}
+      onTranslate={() => {
+        closeOverlay();
+        handleFetchAndSimplify();
+      }}
+      onAutoTranslate={toggleAutoTranslate}
+      autoTranslating={autoTranslating}
+      isLoading={isLoading}
+      buttonLabel={buttonLabel}
+      hasApiKey={hasApiKey}
+      onAddApiKey={() => openSettings("ai")}
+      autoFocus={autoFocus}
+    />
+  );
+
+  const noticeBanner = notice && (
+    <div
+      role={notice.kind === "error" ? "alert" : "status"}
+      className="flex items-start gap-3 mb-2 px-3 py-2 rounded-lg border text-sm"
+      style={
+        notice.kind === "error"
+          ? { borderColor: "#dc262680", backgroundColor: "#dc262614" }
+          : { borderColor: textColor + "30", backgroundColor: textColor + "0d" }
+      }
+    >
+      <span className="flex-1 whitespace-pre-wrap">
+        {notice.kind === "error"
+          ? notice.message
+          : notice.kind === "storageFull"
+            ? t.storageFull
+            : t.storageEvicted.replace("{n}", String(notice.count))}
+      </span>
+      <button
+        onClick={() => setNotice(null)}
+        className="shrink-0 opacity-60 hover:opacity-100 cursor-pointer"
+        aria-label={t.dismiss}
+      >
+        ✕
+      </button>
+    </div>
+  );
 
   return (
     <main
       className="min-h-screen transition-colors duration-200"
       style={{ backgroundColor: settings.bgColor, color: textColor }}
     >
-      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-        <div className="flex items-center justify-between gap-2 mb-4">
-          <h1 className="text-lg sm:text-xl font-bold">{t.appTitle}</h1>
-
-          {/* Desktop buttons */}
-          <div className="hidden sm:flex gap-2">
-            <button
-              onClick={() => togglePanel("chapters")}
-              disabled={!currentNovelSlug || currentNovelChapters.length === 0}
-              className={btnClass + " text-sm disabled:opacity-30 disabled:cursor-not-allowed" + (activePanel === "chapters" ? " active" : "")}
-              style={btnStyle}
-            >
-              {t.chapters} ({currentNovelChapters.length})
-            </button>
-            <button
-              onClick={() => togglePanel("novels")}
-              className={btnClass + " text-sm" + (activePanel === "novels" ? " active" : "")}
-              style={btnStyle}
-            >
-              {t.novels}
-            </button>
-            <button
-              onClick={() => togglePanel("ai-settings")}
-              className={btnClass + " text-sm" + (activePanel === "ai-settings" ? " active" : "")}
-              style={btnStyle}
-            >
-              {t.aiSettings}
-            </button>
-            <button
-              onClick={() => togglePanel("settings")}
-              className={btnClass + " text-sm" + (activePanel === "settings" ? " active" : "")}
-              style={btnStyle}
-            >
-              {t.settings}
-            </button>
-            <button
-              onClick={() => togglePanel("contact")}
-              className={btnClass + " text-sm" + (activePanel === "contact" ? " active" : "")}
-              style={btnStyle}
-            >
-              {t.contact}
-            </button>
-          </div>
-
-          {/* Mobile hamburger menu */}
-          <div className="relative sm:hidden">
-            <button
-              onClick={() => setMenuOpen(!menuOpen)}
-              className={btnClass + (menuOpen ? " active" : "")}
-              style={btnStyle}
-              aria-label={t.menu}
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                {menuOpen ? (
-                  <>
-                    <path d="M18 6L6 18" />
-                    <path d="M6 6l12 12" />
-                  </>
-                ) : (
-                  <>
-                    <path d="M3 12h18" />
-                    <path d="M3 6h18" />
-                    <path d="M3 18h18" />
-                  </>
-                )}
-              </svg>
-            </button>
-            {menuOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
-                <div
-                  className="absolute right-0 top-full mt-2 z-50 rounded-lg border shadow-lg min-w-48 py-1 flex flex-col"
-                  style={{ borderColor: textColor + "20", backgroundColor: settings.bgColor }}
-                >
-                  <button
-                    onClick={() => handleMenuAction("chapters")}
-                    disabled={!currentNovelSlug || currentNovelChapters.length === 0}
-                    className={"px-4 py-2.5 text-sm text-left transition-all disabled:opacity-30 disabled:cursor-not-allowed" + (activePanel === "chapters" ? " font-bold" : "")}
-                    style={{ color: textColor, backgroundColor: activePanel === "chapters" ? textColor + "10" : "transparent" }}
-                  >
-                    {t.chapters} ({currentNovelChapters.length})
-                  </button>
-                  <button
-                    onClick={() => handleMenuAction("novels")}
-                    className={"px-4 py-2.5 text-sm text-left transition-all" + (activePanel === "novels" ? " font-bold" : "")}
-                    style={{ color: textColor, backgroundColor: activePanel === "novels" ? textColor + "10" : "transparent" }}
-                  >
-                    {t.novels}
-                  </button>
-                  <button
-                    onClick={() => handleMenuAction("ai-settings")}
-                    className={"px-4 py-2.5 text-sm text-left transition-all" + (activePanel === "ai-settings" ? " font-bold" : "")}
-                    style={{ color: textColor, backgroundColor: activePanel === "ai-settings" ? textColor + "10" : "transparent" }}
-                  >
-                    {t.aiSettings}
-                  </button>
-                  <button
-                    onClick={() => handleMenuAction("settings")}
-                    className={"px-4 py-2.5 text-sm text-left transition-all" + (activePanel === "settings" ? " font-bold" : "")}
-                    style={{ color: textColor, backgroundColor: activePanel === "settings" ? textColor + "10" : "transparent" }}
-                  >
-                    {t.settings}
-                  </button>
-                  <button
-                    onClick={() => handleMenuAction("contact")}
-                    className={"px-4 py-2.5 text-sm text-left transition-all" + (activePanel === "contact" ? " font-bold" : "")}
-                    style={{ color: textColor, backgroundColor: activePanel === "contact" ? textColor + "10" : "transparent" }}
-                  >
-                    {t.contact}
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-
-        {activePanel !== "none" && (
-          <div
-            className="fixed inset-0 z-10"
-            onClick={() => setActivePanel("none")}
+      <header
+        className={
+          "sticky top-0 z-40 border-b transition-transform duration-200" +
+          (headerHidden && overlay === "none" ? " -translate-y-full" : "")
+        }
+        style={{ backgroundColor: settings.bgColor, borderColor: textColor + "15" }}
+      >
+        <div className="relative max-w-4xl mx-auto px-3 sm:px-4 h-14 flex items-center gap-1 sm:gap-2">
+          <HeaderButton
+            label={t.library}
+            icon={<ListIcon />}
+            onClick={openLibrary}
+            active={overlay === "library"}
+            textColor={textColor}
+            showLabel
           />
-        )}
+          <p className="flex-1 min-w-0 truncate text-center text-sm sm:text-base font-semibold px-1">
+            {novelName || t.appTitle}
+          </p>
+          <HeaderButton
+            label={t.newNovel}
+            icon={<PlusIcon />}
+            onClick={() => toggleOverlay("new")}
+            active={overlay === "new"}
+            textColor={textColor}
+            showLabel
+          />
+          <HeaderButton
+            label={t.display}
+            icon={<TypeIcon />}
+            onClick={() => toggleOverlay("display")}
+            active={overlay === "display"}
+            textColor={textColor}
+          />
+          <HeaderButton
+            label={t.settings}
+            icon={<SettingsIcon />}
+            onClick={() => (overlay === "settings" ? closeOverlay() : openSettings())}
+            active={overlay === "settings"}
+            textColor={textColor}
+          />
 
-        {activePanel === "ai-settings" && (
-          <div className="relative z-20">
-            <AISettingsPanel
-              settings={settings}
-              textColor={textColor}
-              t={t}
-              onUpdate={updateSettings}
-            />
-          </div>
-        )}
-
-        {activePanel === "settings" && (
-          <div className="relative z-20">
-            <SettingsPanel
-              settings={settings}
-              textColor={textColor}
-              t={t}
-              url={url}
-              onUrlChange={setUrl}
-              onTranslate={() => {
-                setActivePanel("none");
-                handleFetchAndSimplify();
-              }}
-              onAutoTranslate={toggleAutoTranslate}
-              autoTranslating={autoTranslating}
-              isLoading={isLoading}
-              buttonLabel={buttonLabel}
-              onUpdate={updateSettings}
-            />
-          </div>
-        )}
-
-        {activePanel === "novels" && (
-          <div className="relative z-20">
-            <SavedNovelsList
-              chapters={savedChapters}
-              settings={settings}
-              textColor={textColor}
-              currentNovelSlug={currentNovelSlug}
-              t={t}
-              onSelectNovel={handleSelectNovel}
-              onClearNovel={handleClearNovel}
-            />
-          </div>
-        )}
-
-        {activePanel === "chapters" && (
-          <div className="relative z-20">
-            <SavedChaptersList
-              chapters={currentNovelChapters}
-              settings={settings}
-              textColor={textColor}
-              currentUrl={url}
-              t={t}
-              onLoad={loadSavedChapter}
-            />
-          </div>
-        )}
-
-        {activePanel === "contact" && (
-          <div className="relative z-20">
-            <ContactPanel textColor={textColor} />
-          </div>
-        )}
-
-        <div>
-          {(novelName || chapterName || title) && (
-            <div className="text-center mb-4">
-              {novelName && (
-                <h2 className="text-lg font-semibold">{novelName}</h2>
-              )}
-              {chapterName && (
-                <p className="text-sm mt-1" style={{ color: textColor + "80" }}>{chapterName}</p>
-              )}
-              {!novelName && !chapterName && title && (
-                <h2 className="text-lg font-semibold">{title}</h2>
-              )}
-            </div>
+          {overlay === "new" && (
+            <Popover label={t.newNovel} textColor={textColor} bgColor={settings.bgColor} onClose={closeOverlay}>
+              {linkForm(true)}
+            </Popover>
           )}
-
-          {notice && (
-            <div
-              role={notice.kind === "error" ? "alert" : "status"}
-              className="flex items-start gap-3 mb-2 px-3 py-2 rounded-lg border text-sm"
-              style={
-                notice.kind === "error"
-                  ? { borderColor: "#dc262680", backgroundColor: "#dc262614" }
-                  : { borderColor: textColor + "30", backgroundColor: textColor + "0d" }
-              }
-            >
-              <span className="flex-1 whitespace-pre-wrap">
-                {notice.kind === "error"
-                  ? notice.message
-                  : notice.kind === "storageFull"
-                    ? t.storageFull
-                    : t.storageEvicted.replace("{n}", String(notice.count))}
-              </span>
-              <button
-                onClick={() => setNotice(null)}
-                className="shrink-0 opacity-60 hover:opacity-100 cursor-pointer"
-                aria-label={t.dismiss}
-              >
-                ✕
-              </button>
-            </div>
+          {overlay === "display" && (
+            <Popover label={t.display} textColor={textColor} bgColor={settings.bgColor} onClose={closeOverlay}>
+              <DisplaySettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />
+            </Popover>
           )}
-
-          <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} canNavigate={canNavigate} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={navigateToChapter} />
-
-          <div
-            className="min-h-[60vh] px-1 sm:px-2 py-4 whitespace-pre-wrap"
-            style={{ fontSize: `${settings.fontSize}px`, lineHeight: settings.lineSpacing }}
-          >
-            {simplifiedText || (
-              <span style={{ color: textColor + "40" }}>{t.contentPlaceholder}</span>
-            )}
-          </div>
-
-          <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} canNavigate={canNavigate} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={navigateToChapter} />
         </div>
+      </header>
+
+      <div className="max-w-4xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
+        {nothingOpen ? (
+          <section className="max-w-xl mx-auto py-6 sm:py-12">
+            <h1 className="text-xl sm:text-2xl font-semibold text-center mb-6">{t.emptyTitle}</h1>
+            {noticeBanner}
+            {linkForm(false)}
+          </section>
+        ) : (
+          <>
+            {(novelName || chapterName || title) && (
+              <div className="text-center mb-4">
+                {novelName && <h1 className="text-lg font-semibold">{novelName}</h1>}
+                {chapterName && (
+                  <p className="text-sm mt-1" style={{ color: textColor + "80" }}>{chapterName}</p>
+                )}
+                {!novelName && !chapterName && title && <h1 className="text-lg font-semibold">{title}</h1>}
+              </div>
+            )}
+
+            {noticeBanner}
+
+            <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} canNavigate={canNavigate} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={navigateToChapter} />
+
+            <div
+              className="min-h-[60vh] px-1 sm:px-2 py-4 whitespace-pre-wrap"
+              style={{ fontSize: `${settings.fontSize}px`, lineHeight: settings.lineSpacing }}
+            >
+              {simplifiedText || (
+                <span className={isLoading ? "animate-pulse" : undefined} style={{ color: textColor + "60" }}>
+                  {isLoading ? buttonLabel : t.contentPlaceholder}
+                </span>
+              )}
+            </div>
+
+            <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} canNavigate={canNavigate} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={navigateToChapter} />
+          </>
+        )}
       </div>
 
       {autoTranslating && (
         <button
           onClick={toggleAutoTranslate}
-          className="fixed bottom-6 left-6 h-12 px-4 rounded-full shadow-lg flex items-center gap-2 cursor-pointer z-50 text-sm font-medium transition-all hover:scale-105"
+          className="fixed bottom-6 left-6 h-12 px-4 rounded-full shadow-lg flex items-center gap-2 cursor-pointer z-30 text-sm font-medium transition-all hover:scale-105"
           style={{ backgroundColor: "#dc2626", color: "#ffffff" }}
           aria-label={t.pause}
         >
@@ -760,7 +723,7 @@ export default function Home() {
       {showScrollTop && (
         <button
           onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-          className="fixed bottom-6 right-6 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 cursor-pointer z-50"
+          className="fixed bottom-6 right-6 w-12 h-12 rounded-full shadow-lg flex items-center justify-center transition-all hover:scale-110 cursor-pointer z-30"
           style={{
             backgroundColor: textColor + "20",
             color: textColor,
@@ -773,6 +736,80 @@ export default function Home() {
             <path d="M18 15l-6-6-6 6" />
           </svg>
         </button>
+      )}
+      {overlay === "library" && (
+        <Sheet
+          side="left"
+          title={t.library}
+          closeLabel={t.close}
+          textColor={textColor}
+          bgColor={settings.bgColor}
+          onClose={closeOverlay}
+          header={
+            <Tabs
+              idPrefix="library"
+              tabs={[
+                { id: "chapters", label: `${t.chapters} (${currentNovelChapters.length})` },
+                { id: "novels", label: t.novels },
+              ]}
+              active={libraryTab}
+              onChange={setLibraryTab}
+              textColor={textColor}
+            />
+          }
+        >
+          <TabPanel idPrefix="library" active={libraryTab}>
+            {libraryTab === "chapters" ? (
+              <SavedChaptersList
+                chapters={currentNovelChapters}
+                settings={settings}
+                textColor={textColor}
+                currentUrl={url}
+                t={t}
+                onLoad={loadSavedChapter}
+              />
+            ) : (
+              <SavedNovelsList
+                chapters={savedChapters}
+                textColor={textColor}
+                currentNovelSlug={currentNovelSlug}
+                t={t}
+                onSelectNovel={handleSelectNovel}
+                onClearNovel={handleClearNovel}
+              />
+            )}
+          </TabPanel>
+        </Sheet>
+      )}
+
+      {overlay === "settings" && (
+        <Sheet
+          side="right"
+          title={t.settings}
+          closeLabel={t.close}
+          textColor={textColor}
+          bgColor={settings.bgColor}
+          onClose={closeOverlay}
+          header={
+            <Tabs
+              idPrefix="settings"
+              tabs={[
+                { id: "ai", label: t.aiSettings },
+                { id: "general", label: t.general },
+                { id: "contact", label: t.contact },
+              ]}
+              active={settingsTab}
+              onChange={setSettingsTab}
+              textColor={textColor}
+            />
+          }
+        >
+          <TabPanel idPrefix="settings" active={settingsTab}>
+            {settingsTab === "ai" && <AISettingsPanel settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
+            {settingsTab === "general" && <GeneralSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
+            {settingsTab === "contact" && <ContactPanel textColor={textColor} />}
+          </TabPanel>
+        </Sheet>
       )}
     </main>
   );

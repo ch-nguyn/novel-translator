@@ -5,8 +5,50 @@
   border-color: currentColor !important;
 }
 
-.panel-btn.active {
-  filter: brightness(1.3);
-  border-color: currentColor !important;
-  background-color: color-mix(in srgb, currentColor 15%, transparent) !important;
+/* Keeps the page from shifting sideways when a drawer locks scrolling */
+html {
+  scrollbar-gutter: stable;
+}
+
+/* Overlays (components/Sheet, components/Popover) */
+@keyframes slide-up {
+  from { transform: translateY(100%); }
+}
+@keyframes slide-from-left {
+  from { transform: translateX(-100%); }
+}
+@keyframes slide-from-right {
+  from { transform: translateX(100%); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+}
+@keyframes drop-in {
+  from { opacity: 0; transform: translateY(-6px); }
+}
+
+.backdrop {
+  animation: fade-in 0.2s ease-out;
+}
+.sheet {
+  animation: slide-up 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+}
+@media (min-width: 640px) {
+  .sheet-left {
+    animation-name: slide-from-left;
+  }
+  .sheet-right {
+    animation-name: slide-from-right;
+  }
+}
+.popover {
+  animation: drop-in 0.15s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .backdrop,
+  .sheet,
+  .popover {
+    animation: none;
+  }
 }

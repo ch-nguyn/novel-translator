@@ -68,157 +68,165 @@ export default function AISettingsPanel({ settings, textColor, t, onUpdate }: Pr
   }
 
   return (
-    <div
-      className="mb-4 p-3 sm:p-4 rounded-lg border"
-      style={{ borderColor: textColor + "20" }}
-    >
-      <div className="flex flex-col gap-4">
-        <div>
-          <label className="text-sm font-medium block mb-2">{t.aiModel}</label>
-          <div ref={modelPickerRef} className="relative">
-            <div className="flex">
-              <input
-                role="combobox"
-                aria-expanded={modelMenuOpen}
-                aria-controls="openai-model-options"
-                value={settings.aiModel}
-                onFocus={() => setModelMenuOpen(true)}
-                onChange={(e) => {
-                  const model = e.target.value;
-                  onUpdate({ aiModel: model, ...(isOpenAIReasoningModel(model) ? {} : { webSearch: false }) });
-                  setModelMenuOpen(true);
-                }}
-                placeholder={t.aiModelPlaceholder}
-                className="w-full px-3 py-2 rounded-l border text-sm"
-                style={inputStyle}
-              />
-              <button
-                type="button"
-                aria-label={t.aiModel}
-                aria-haspopup="listbox"
-                aria-expanded={modelMenuOpen}
-                onClick={() => setModelMenuOpen((open) => !open)}
-                className="px-3 rounded-r border border-l-0 text-sm cursor-pointer hover:opacity-70"
-                style={inputStyle}
-              >
-                ▾
-              </button>
-            </div>
-            {modelMenuOpen && (
-              <div
-                id="openai-model-options"
-                role="listbox"
-                className="absolute left-0 right-0 z-20 mt-1 rounded border shadow-lg overflow-hidden"
-                style={{
-                  backgroundColor: textColor === "#d4d4d4" || textColor === "#cccccc" ? "#1a1a2e" : "#ffffff",
-                  borderColor: textColor + "30",
-                }}
-              >
-                {AI_MODEL_OPTIONS.flatMap((group) => group.models).map((model) => (
-                  <button
-                    key={model}
-                    type="button"
-                    role="option"
-                    aria-selected={settings.aiModel === model}
-                    onClick={() => updateModel(model)}
-                    className="block w-full px-3 py-2 text-left text-sm cursor-pointer hover:opacity-70"
-                    style={{
-                      backgroundColor: settings.aiModel === model ? textColor + "15" : "transparent",
-                      color: textColor,
-                    }}
-                  >
-                    {model}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div>
-          <label className="text-sm font-medium block mb-2">{label}</label>
-          <input
-            type="password"
-            value={settings[keyField]}
-            onChange={(e) => onUpdate({ [keyField]: e.target.value })}
-            placeholder={t.apiKeyPlaceholder}
-            className="w-full px-3 py-2 rounded border text-sm"
-            style={inputStyle}
-          />
-          <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
-            {t.apiKeyNote}
-          </p>
-        </div>
-
-        {isChatGPT && <div>
-          <div
-            className="flex items-center justify-between gap-3 cursor-pointer"
-            onClick={toggleWebSearch}
-          >
-            <span className="text-sm font-medium">{t.webSearch}</span>
-            <div
-              className="relative w-11 h-6 rounded-full shrink-0 transition-colors duration-200"
-              style={{ backgroundColor: settings.webSearch ? "#3b82f6" : textColor + "20" }}
-            >
-              <div
-                className="absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
-                style={{ transform: settings.webSearch ? "translateX(22px)" : "translateX(2px)" }}
-              />
-            </div>
-          </div>
-          <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
-            {t.webSearchNote}
-          </p>
-        </div>}
-
-        {isChatGPT && <div>
-          <label className="text-sm font-medium block mb-2">{t.reasoningEffort}</label>
-          <select
-            value={settings.reasoningEffort}
-            onChange={(e) => onUpdate({ reasoningEffort: e.target.value as ReasoningEffort })}
-            className="w-full px-3 py-2 rounded border text-sm"
-            style={inputStyle}
-          >
-            {REASONING_EFFORT_OPTIONS.map((effort) => (
-              <option key={effort} value={effort}>
-                {effortLabelMap[effort]}
-              </option>
-            ))}
-          </select>
-          <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
-            {t.reasoningEffortNote}
-          </p>
-        </div>}
-
-        <div>
-          <label className="text-sm font-medium block mb-2">{t.customPrompt}</label>
-          <textarea
-            value={settings.customPrompt}
-            onChange={(e) => onUpdate({ customPrompt: e.target.value })}
-            placeholder={t.customPromptPlaceholder}
-            rows={4}
-            className="w-full px-3 py-2 rounded border text-sm resize-y"
-            style={inputStyle}
-          />
-        </div>
-
-        {isChatGPT && settings.webSearch && (
-          <div>
-            <label className="text-sm font-medium block mb-2">{t.referenceLinks}</label>
-            <textarea
-              value={settings.referenceLinks}
-              onChange={(e) => onUpdate({ referenceLinks: e.target.value })}
-              placeholder={t.referenceLinksPlaceholder}
-              rows={2}
-              className="w-full px-3 py-2 rounded border text-sm resize-y"
+    <div className="flex flex-col gap-5">
+      <div>
+        <label className="text-sm font-medium block mb-2">{t.aiModel}</label>
+        <div
+          ref={modelPickerRef}
+          className="relative"
+          onKeyDown={(e) => {
+            // Close just the list, not the settings drawer around it. React
+            // listens on the document too, so stop the drawer's listener there.
+            if (e.key === "Escape" && modelMenuOpen) {
+              e.nativeEvent.stopImmediatePropagation();
+              setModelMenuOpen(false);
+            }
+          }}
+        >
+          <div className="flex">
+            <input
+              role="combobox"
+              aria-expanded={modelMenuOpen}
+              aria-controls="openai-model-options"
+              value={settings.aiModel}
+              onFocus={() => setModelMenuOpen(true)}
+              onChange={(e) => {
+                const model = e.target.value;
+                onUpdate({ aiModel: model, ...(isOpenAIReasoningModel(model) ? {} : { webSearch: false }) });
+                setModelMenuOpen(true);
+              }}
+              placeholder={t.aiModelPlaceholder}
+              className="w-full px-3 py-2 rounded-l border text-sm"
               style={inputStyle}
             />
-            <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
-              {t.referenceLinksNote}
-            </p>
+            <button
+              type="button"
+              aria-label={t.aiModel}
+              aria-haspopup="listbox"
+              aria-expanded={modelMenuOpen}
+              onClick={() => setModelMenuOpen((open) => !open)}
+              className="px-3 rounded-r border border-l-0 text-sm cursor-pointer hover:opacity-70"
+              style={inputStyle}
+            >
+              ▾
+            </button>
           </div>
-        )}
+          {modelMenuOpen && (
+            <div
+              id="openai-model-options"
+              role="listbox"
+              className="absolute left-0 right-0 z-20 mt-1 rounded border shadow-lg overflow-hidden"
+              style={{
+                backgroundColor: textColor === "#d4d4d4" || textColor === "#cccccc" ? "#1a1a2e" : "#ffffff",
+                borderColor: textColor + "30",
+              }}
+            >
+              {AI_MODEL_OPTIONS.flatMap((group) => group.models).map((model) => (
+                <button
+                  key={model}
+                  type="button"
+                  role="option"
+                  aria-selected={settings.aiModel === model}
+                  onClick={() => updateModel(model)}
+                  className="block w-full px-3 py-2 text-left text-sm cursor-pointer hover:opacity-70"
+                  style={{
+                    backgroundColor: settings.aiModel === model ? textColor + "15" : "transparent",
+                    color: textColor,
+                  }}
+                >
+                  {model}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
+
+      <div>
+        <label className="text-sm font-medium block mb-2">{label}</label>
+        <input
+          type="password"
+          value={settings[keyField]}
+          onChange={(e) => onUpdate({ [keyField]: e.target.value })}
+          placeholder={t.apiKeyPlaceholder}
+          className="w-full px-3 py-2 rounded-lg border text-sm"
+          style={inputStyle}
+        />
+        <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
+          {t.apiKeyNote}
+        </p>
+      </div>
+
+      {isChatGPT && <div>
+        <button
+          role="switch"
+          aria-checked={settings.webSearch}
+          onClick={toggleWebSearch}
+          className="w-full flex items-center justify-between gap-3 text-left cursor-pointer"
+        >
+          <span className="text-sm font-medium">{t.webSearch}</span>
+          <span
+            className="relative w-11 h-6 rounded-full shrink-0 transition-colors duration-200"
+            style={{ backgroundColor: settings.webSearch ? "#3b82f6" : textColor + "20" }}
+          >
+            <span
+              className="absolute top-0.5 left-0 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"
+              style={{ transform: settings.webSearch ? "translateX(22px)" : "translateX(2px)" }}
+            />
+          </span>
+        </button>
+        <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
+          {t.webSearchNote}
+        </p>
+      </div>}
+
+      {isChatGPT && <div>
+        <label className="text-sm font-medium block mb-2">{t.reasoningEffort}</label>
+        <select
+          value={settings.reasoningEffort}
+          onChange={(e) => onUpdate({ reasoningEffort: e.target.value as ReasoningEffort })}
+          className="w-full px-3 py-2 rounded-lg border text-sm"
+          style={inputStyle}
+        >
+          {REASONING_EFFORT_OPTIONS.map((effort) => (
+            <option key={effort} value={effort}>
+              {effortLabelMap[effort]}
+            </option>
+          ))}
+        </select>
+        <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
+          {t.reasoningEffortNote}
+        </p>
+      </div>}
+
+      <div>
+        <label className="text-sm font-medium block mb-2">{t.customPrompt}</label>
+        <textarea
+          value={settings.customPrompt}
+          onChange={(e) => onUpdate({ customPrompt: e.target.value })}
+          placeholder={t.customPromptPlaceholder}
+          rows={4}
+          className="w-full px-3 py-2 rounded-lg border text-sm resize-y"
+          style={inputStyle}
+        />
+      </div>
+
+      {isChatGPT && settings.webSearch && (
+        <div>
+          <label className="text-sm font-medium block mb-2">{t.referenceLinks}</label>
+          <textarea
+            value={settings.referenceLinks}
+            onChange={(e) => onUpdate({ referenceLinks: e.target.value })}
+            placeholder={t.referenceLinksPlaceholder}
+            rows={2}
+            className="w-full px-3 py-2 rounded-lg border text-sm resize-y"
+            style={inputStyle}
+          />
+          <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
+            {t.referenceLinksNote}
+          </p>
+        </div>
+      )}
     </div>
   );
 }

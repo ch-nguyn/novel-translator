@@ -36,62 +36,48 @@ export default function SavedChaptersList({
     : chapters;
 
   return (
-    <div
-      className="mb-4 rounded-lg border overflow-hidden"
-      style={{ borderColor: textColor + "20" }}
-    >
-      <div
-        className="p-3 border-b"
-        style={{ borderColor: textColor + "10" }}
-      >
-        <input
-          type="text"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder={t.searchChapter}
-          className="w-full px-3 py-2 rounded border text-sm"
-          style={{
-            backgroundColor: settings.bgColor,
-            borderColor: textColor + "20",
-            color: textColor,
-          }}
-        />
-      </div>
-      <div className="max-h-60 sm:max-h-64 overflow-auto">
-        {filtered.length === 0 ? (
-          <p
-            className="p-4 text-center text-sm"
-            style={{ color: textColor + "60" }}
-          >
-            {t.noChapters}
-          </p>
-        ) : (
-          filtered.map((ch) => {
+    <div>
+      <input
+        type="search"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder={t.searchChapter}
+        aria-label={t.searchChapter}
+        className="w-full px-3 py-2 mb-2 rounded-lg border text-sm"
+        style={{
+          backgroundColor: settings.bgColor,
+          borderColor: textColor + "20",
+          color: textColor,
+        }}
+      />
+      {filtered.length === 0 ? (
+        <p className="p-4 text-center text-sm" style={{ color: textColor + "60" }}>
+          {t.noChapters}
+        </p>
+      ) : (
+        <ul>
+          {filtered.map((ch) => {
             const isActive = ch.url === currentUrl;
             return (
-            <div
-              key={ch.url}
-              className="flex items-center px-3 sm:px-4 py-3 border-b last:border-b-0"
-              style={{
-                borderColor: textColor + "10",
-                backgroundColor: isActive ? "#3b82f6" + "20" : "transparent",
-                borderLeft: isActive ? "3px solid #3b82f6" : "3px solid transparent",
-              }}
-            >
-              <button
-                onClick={() => onLoad(ch)}
-                className="text-left flex-1 cursor-pointer rounded-lg px-2 py-1 transition-colors hover:opacity-70"
-              >
-                <p className="text-sm font-medium truncate" style={{ color: isActive ? "#3b82f6" : undefined }}>{ch.title}</p>
-                <p className="text-xs" style={{ color: textColor + "60" }}>
-                  {new Date(ch.savedAt).toLocaleString()}
-                </p>
-              </button>
-            </div>
+              <li key={ch.url}>
+                <button
+                  onClick={() => onLoad(ch)}
+                  aria-current={isActive ? "true" : undefined}
+                  className="w-full text-left px-3 py-2.5 rounded-lg cursor-pointer transition-colors hover:opacity-70"
+                  style={{ backgroundColor: isActive ? "#3b82f620" : "transparent" }}
+                >
+                  <p className="text-sm font-medium truncate" style={{ color: isActive ? "#3b82f6" : undefined }}>
+                    {ch.title}
+                  </p>
+                  <p className="text-xs" style={{ color: textColor + "60" }}>
+                    {new Date(ch.savedAt).toLocaleString()}
+                  </p>
+                </button>
+              </li>
             );
-          })
-        )}
-      </div>
+          })}
+        </ul>
+      )}
     </div>
   );
 }
