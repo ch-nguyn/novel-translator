@@ -28,6 +28,7 @@ export default function TermsPage() {
       </p>
       <ul>
         <li>Thanh toán bằng chuyển khoản ngân hàng với đúng nội dung chuyển khoản ứng dụng đưa ra; gói tự kích hoạt khi tiền về.</li>
+        <li>Gói chỉ gồm việc dịch. Nghe truyện bằng giọng AI không thuộc gói và vẫn dùng OpenAI API key của bạn; giọng của máy vẫn miễn phí.</li>
         <li>Mỗi 49.000đ trong một lần chuyển được cộng thêm 30 ngày. Gói không tự gia hạn.</li>
         <li>Chuyển sai nội dung hoặc thiếu tiền thì gói chưa kích hoạt; liên hệ qua mục Liên hệ để được xử lý.</li>
         <li>Gói dành cho một người dùng; chia sẻ tài khoản, dùng tự động hoặc gây quá tải có thể khiến tài khoản bị khóa.</li>
