@@ -4,8 +4,8 @@ import { auth } from "./auth";
 import { isSubscribed } from "./subscription";
 
 // Which key pays for an AI call. The app's own AI Router key comes first, for
-// signed-in users on the monthly plan or let in by SYSTEM_KEY_ALLOWED_EMAILS
-// (comma-separated); everyone else uses the key they entered in Settings.
+// signed-in users on the monthly plan; everyone else uses the key they
+// entered in Settings.
 // The router key never leaves the server.
 
 // The only model run on the app's key
@@ -38,15 +38,6 @@ export function redactSystemKey(text: string): string {
   return key ? text.split(key).join("[redacted]") : text;
 }
 
-function allowedEmails(): Set<string> {
-  return new Set(
-    (process.env.SYSTEM_KEY_ALLOWED_EMAILS ?? "")
-      .split(",")
-      .map((email) => email.trim().toLowerCase())
-      .filter(Boolean)
-  );
-}
-
 // The error a user is shown for a failed AI call: on the app's key, a generic
 // one (the details go to the logs)
 export function publicAiError(apiKey: string, message: string): string {
@@ -55,17 +46,11 @@ export function publicAiError(apiKey: string, message: string): string {
   return AI_UNAVAILABLE_ERROR;
 }
 
-// The user may translate on the app's key without paying
-export function isAllowListed(user: { email: string; emailVerified: boolean }): boolean {
-  return !!systemApiKey() && user.emailVerified && allowedEmails().has(user.email.toLowerCase());
-}
-
 // The request comes from a signed-in user the app's key is open to
 export async function canUseSystemAI(headers: Headers): Promise<boolean> {
   if (!systemApiKey()) return false;
   const session = await auth.api.getSession({ headers }).catch(() => null);
   if (!session) return false;
-  if (isAllowListed(session.user)) return true;
   return isSubscribed(session.user.id).catch(() => false);
 }
 

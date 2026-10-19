@@ -60,7 +60,7 @@ function paymentSettings() {
   return { account, bank, accountName: ACCOUNT_NAME };
 }
 
-export async function subscriptionStatus(userId: string): Promise<Omit<SubscriptionStatus, "free">> {
+export async function subscriptionStatus(userId: string): Promise<SubscriptionStatus> {
   const { code, paidUntil } = await paymentCode(userId);
   const until = paidUntil ? paidUntil.getTime() : null;
   const settings = paymentSettings();
