@@ -55,12 +55,17 @@ export function publicAiError(apiKey: string, message: string): string {
   return AI_UNAVAILABLE_ERROR;
 }
 
+// The user may translate on the app's key without paying
+export function isAllowListed(user: { email: string; emailVerified: boolean }): boolean {
+  return !!systemApiKey() && user.emailVerified && allowedEmails().has(user.email.toLowerCase());
+}
+
 // The request comes from a signed-in user the app's key is open to
 export async function canUseSystemAI(headers: Headers): Promise<boolean> {
   if (!systemApiKey()) return false;
   const session = await auth.api.getSession({ headers }).catch(() => null);
   if (!session) return false;
-  if (session.user.emailVerified && allowedEmails().has(session.user.email.toLowerCase())) return true;
+  if (isAllowListed(session.user)) return true;
   return isSubscribed(session.user.id).catch(() => false);
 }
 

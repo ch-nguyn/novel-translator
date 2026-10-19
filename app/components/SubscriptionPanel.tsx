@@ -46,7 +46,7 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
       (loaded) => {
         setStatus(loaded);
         // Paid while the details were closed: the app may still ask for a key
-        if (loaded.active) onPaidRef.current();
+        if (loaded.active || loaded.free) onPaidRef.current();
       },
       () => !controller.signal.aborted && setFailed(true)
     );
@@ -86,7 +86,7 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
     <section className="flex flex-col gap-3 p-4 rounded-xl border" style={{ borderColor: textColor + "25" }} aria-label={t.planName}>
       <div className="flex items-baseline justify-between gap-3">
         <h3 className="text-sm font-semibold">{t.planName}</h3>
-        <span className="text-sm font-semibold">{t.planPrice.replace("{price}", price).replace("{days}", String(PLAN_DAYS))}</span>
+        {!status?.free && <span className="text-sm font-semibold">{t.planPrice.replace("{price}", price).replace("{days}", String(PLAN_DAYS))}</span>}
       </div>
       <p className="text-sm" style={{ color: muted }}>{t.planPerks}</p>
 
@@ -103,7 +103,9 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
           </button>
         </div>
       )}
-      {status && (
+      {status?.free ? (
+        <p className="text-sm font-medium text-green-600">{t.planFree}</p>
+      ) : status && (
         <>
           {status.paidUntil && (
             <p className={`text-sm font-medium ${status.active ? "text-green-600" : ""}`} style={status.active ? undefined : { color: muted }}>
