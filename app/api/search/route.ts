@@ -20,7 +20,8 @@ export async function POST(req: Request) {
   }
   if (!body || typeof body !== "object") return fail("invalid", 400);
   const query = typeof body.query === "string" ? body.query.trim() : "";
-  const apiKey = (await resolveAiAccess(req, body.apiKey, undefined))?.apiKey ?? "";
+  const access = await resolveAiAccess(req, body.apiKey, undefined);
+  const apiKey = access?.apiKey ?? "";
 
   let candidates: SearchCandidate[];
   // A guess the AI just made, kept for everyone if it finds novels
@@ -40,7 +41,8 @@ export async function POST(req: Request) {
       // other script and author (to find it among look-alikes)
       guess = await guessCandidates(apiKey, query);
     } catch (e) {
-      const rejected = e instanceof ModelCallError && (e.status === 401 || e.status === 403);
+      // Only the user's own key is theirs to fix
+      const rejected = !access?.system && e instanceof ModelCallError && (e.status === 401 || e.status === 403);
       if (!chinese) return rejected ? fail("badKey", 401) : fail("aiFailed", 502);
       guess = null;
     }

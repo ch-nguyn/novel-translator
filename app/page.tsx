@@ -66,9 +66,10 @@ import Sheet, { TabPanel, Tabs } from "./components/Sheet";
 import Popover from "./components/Popover";
 import { HeadphonesIcon, ListIcon, PlusIcon, SettingsIcon, TypeIcon } from "./components/Icons";
 import { getTranslations } from "./lib/i18n";
-import { authClient } from "./lib/auth";
+import { authClient, SIGNED_IN_PARAM } from "./lib/auth";
 import { pushSettings, syncSettings } from "./lib/settingsSync";
 import { hasSystemAI, refreshSystemAI, setSystemAI as rememberSystemAI } from "./lib/systemAI";
+import { AI_UNAVAILABLE_ERROR } from "./lib/plan";
 
 // New chapters can be translated: on the app's key, or the user's
 function canTranslateWith(options: TranslateOptions): boolean {
@@ -127,7 +128,9 @@ type Notice =
   // Old chapters were removed because browser storage was full
   | { kind: "evicted"; count: number }
   // A chapter could not be saved even after removing old ones
-  | { kind: "storageFull" };
+  | { kind: "storageFull" }
+  // The monthly plan ran out since the app last checked
+  | { kind: "planExpired" };
 
 export default function Home() {
   // The link in the form (also the open chapter's, until another is typed)
@@ -340,6 +343,17 @@ export default function Home() {
   useEffect(() => {
     document.documentElement.lang = settings.appLang;
   }, [settings.appLang]);
+
+  // Just signed in: back to the account tab, where the plan is bought
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has(SIGNED_IN_PARAM)) return;
+    params.delete(SIGNED_IN_PARAM);
+    const query = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : "") + window.location.hash);
+    setSettingsTab("account");
+    setOverlay("settings");
+  }, []);
 
   useEffect(() => {
     setSystemAI(hasSystemAI());
@@ -642,6 +656,13 @@ export default function Home() {
         setNotice({ kind: "storageFull" });
       } else if (e instanceof Error && e.name !== "AbortError") {
         setNotice({ kind: "error", message: e.message });
+        // Failed on the plan: it may have run out since the app last asked
+        if (hasSystemAI()) {
+          refreshSystemAI().then((on) => {
+            setSystemAI(on);
+            if (!on && isShown()) setNotice({ kind: "planExpired" });
+          });
+        }
       }
       return null;
     } finally {
@@ -1087,21 +1108,36 @@ export default function Home() {
 
   const noticeBanner = notice && (
     <div
-      role={notice.kind === "error" ? "alert" : "status"}
+      role={notice.kind === "error" || notice.kind === "planExpired" ? "alert" : "status"}
       className="flex items-start gap-3 mb-2 px-3 py-2 rounded-lg border text-sm"
       style={
-        notice.kind === "error"
+        notice.kind === "error" || notice.kind === "planExpired"
           ? { borderColor: "#dc262680", backgroundColor: "#dc262614" }
           : { borderColor: textColor + "30", backgroundColor: textColor + "0d" }
       }
     >
       <span className="flex-1 whitespace-pre-wrap">
         {notice.kind === "error"
-          ? notice.message
+          ? notice.message === AI_UNAVAILABLE_ERROR
+            ? t.aiUnavailable
+            : notice.message
           : notice.kind === "storageFull"
             ? t.storageFull
-            : t.storageEvicted.replace("{n}", String(notice.count))}
+            : notice.kind === "planExpired"
+              ? t.planExpiredNotice
+              : t.storageEvicted.replace("{n}", String(notice.count))}
       </span>
+      {notice.kind === "planExpired" && (
+        <button
+          onClick={() => {
+            setNotice(null);
+            openSettings("account");
+          }}
+          className="shrink-0 font-medium text-blue-600 hover:underline cursor-pointer"
+        >
+          {t.planRenew}
+        </button>
+      )}
       <button
         onClick={() => setNotice(null)}
         className="shrink-0 opacity-60 hover:opacity-100 cursor-pointer"
@@ -1411,6 +1447,7 @@ export default function Home() {
                 enabled={settings.autoGlossary}
                 onToggle={(autoGlossary) => updateSettings({ autoGlossary })}
                 canScan={hasApiKey && currentNovelChapters.length > 0}
+                systemAI={systemAI}
                 scanChapters={Math.min(SCAN_CHAPTERS, currentNovelChapters.length)}
                 scan={scan}
                 message={glossaryMessage}
@@ -1465,7 +1502,7 @@ export default function Home() {
         >
           <TabPanel idPrefix="settings" active={settingsTab}>
             {settingsTab === "ai" && <AISettingsPanel settings={settings} systemAI={systemAI} textColor={textColor} t={t} onUpdate={updateSettings} />}
-            {settingsTab === "speech" && <SpeechSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
+            {settingsTab === "speech" && <SpeechSettings settings={settings} textColor={textColor} t={t} systemAI={systemAI} onUpdate={updateSettings} />}
             {settingsTab === "general" && <GeneralSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "account" && (
               <AccountPanel textColor={textColor} t={t} lang={settings.appLang} onAccessChange={() => refreshSystemAI().then(setSystemAI)} />

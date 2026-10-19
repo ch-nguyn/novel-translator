@@ -8,11 +8,14 @@ interface Props {
   settings: ReaderSettings;
   textColor: string;
   t: Translations;
+  // On the monthly plan the AI tab has no key field: the AI voice is not part
+  // of the plan, so its key is asked for here
+  systemAI?: boolean;
   onUpdate: (patch: Partial<ReaderSettings>) => void;
 }
 
 // The voice chapters are read aloud with
-export default function SpeechSettings({ settings, textColor, t, onUpdate }: Props) {
+export default function SpeechSettings({ settings, textColor, t, systemAI, onUpdate }: Props) {
   const voices = useDeviceVoices();
   const supported = typeof window !== "undefined" && "speechSynthesis" in window;
   const muted = textColor + "80";
@@ -96,10 +99,30 @@ export default function SpeechSettings({ settings, textColor, t, onUpdate }: Pro
               </option>
             ))}
           </select>
-          {!settings.openaiApiKey.trim() && (
-            <p className="text-xs mt-2" style={{ color: "#dc2626" }}>
-              {t.speechNeedKey}
-            </p>
+          {systemAI ? (
+            <div className="mt-3">
+              <label htmlFor="speech-openai-key" className="text-sm font-medium block mb-2">
+                {t.openaiApiKey}
+              </label>
+              <input
+                id="speech-openai-key"
+                type="password"
+                value={settings.openaiApiKey}
+                onChange={(e) => onUpdate({ openaiApiKey: e.target.value })}
+                placeholder={t.apiKeyPlaceholder}
+                className={field}
+                style={fieldStyle}
+              />
+              <p className="text-xs mt-1" style={{ color: muted }}>
+                {t.speechPlanKeyNote}
+              </p>
+            </div>
+          ) : (
+            !settings.openaiApiKey.trim() && (
+              <p className="text-xs mt-2" style={{ color: "#dc2626" }}>
+                {t.speechNeedKey}
+              </p>
+            )
           )}
         </div>
       )}

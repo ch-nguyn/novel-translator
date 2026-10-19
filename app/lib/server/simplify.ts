@@ -1,6 +1,7 @@
 import { DEFAULT_AI_MODEL, GlossaryTerm, isOpenAIReasoningModel } from "../types";
 import { glossaryPrompt } from "../glossary";
-import { openAIBaseUrl, redactSystemKey } from "./aiAccess";
+import { openAIBaseUrl, publicAiError } from "./aiAccess";
+import { AI_UNAVAILABLE_ERROR } from "../plan";
 import { endRecord, newStreamNonce, STREAM_ENDED_EARLY_ERROR, TokenUsage } from "../stream";
 
 const VI_PROMPT = `Bạn là biên tập viên chuyên viết lại truyện tiên hiệp/kiếm hiệp tiếng Việt (dịch từ tiếng Trung). Văn gốc thường lủng củng, ngữ pháp sai, từ ngữ khó hiểu. Nhiệm vụ của bạn là viết lại cho mượt mà, đúng văn phong cổ phong nhưng vẫn dễ đọc.
@@ -113,9 +114,9 @@ interface StreamState {
 // Provider-specific JSON payload of one SSE event
 type SseEvent = any;
 
-async function readProviderError(res: Response, provider: string): Promise<Error> {
+async function readProviderError(res: Response, provider: string, apiKey: string): Promise<Error> {
   const err = await res.json().catch(() => null);
-  return new Error(redactSystemKey(err?.error?.message || `${provider} error: ${res.status}`));
+  return new Error(publicAiError(apiKey, err?.error?.message || `${provider} error: ${res.status}`));
 }
 
 // Incremental Server-Sent Events parser (WHATWG spec): lines end in LF, CRLF or
@@ -181,7 +182,7 @@ class SseParser {
 // mistaken for a complete one.
 function sseToTextStream(
   res: Response,
-  nonce: string,
+  { nonce, apiKey }: { nonce: string; apiKey: string },
   onEvent: (event: SseEvent, emit: (text: string) => void, state: StreamState) => void
 ): ReadableStream {
   return new ReadableStream({
@@ -215,7 +216,7 @@ function sseToTextStream(
       }
 
       if (!state.error && !state.finished) state.error = STREAM_ENDED_EARLY_ERROR;
-      emit(endRecord(nonce, state.usage, state.error && redactSystemKey(state.error)));
+      emit(endRecord(nonce, state.usage, state.error && publicAiError(apiKey, state.error)));
       controller.close();
     },
   });
@@ -238,9 +239,9 @@ async function streamOpenAIResponses({ apiKey, model, text, systemPrompt, effort
     signal,
   });
 
-  if (!res.ok) throw await readProviderError(res, "OpenAI");
+  if (!res.ok) throw await readProviderError(res, "OpenAI", apiKey);
 
-  return sseToTextStream(res, nonce, (event, emit, state) => {
+  return sseToTextStream(res, { nonce, apiKey }, (event, emit, state) => {
     switch (event.type) {
       case "response.output_text.delta":
         if (event.delta) emit(event.delta);
@@ -294,9 +295,9 @@ async function streamOpenAI(
     signal,
   });
 
-  if (!res.ok) throw await readProviderError(res, "OpenAI");
+  if (!res.ok) throw await readProviderError(res, "OpenAI", apiKey);
 
-  return sseToTextStream(res, nonce, (event, emit, state) => {
+  return sseToTextStream(res, { nonce, apiKey }, (event, emit, state) => {
     const choice = event.choices?.[0];
     if (choice?.delta?.content) emit(choice.delta.content);
     if (choice?.delta?.refusal) state.error = REFUSAL_ERROR;
@@ -338,9 +339,9 @@ async function streamGemini({ apiKey, model, text, systemPrompt, effort, signal,
     signal,
   });
 
-  if (!res.ok) throw await readProviderError(res, "Gemini");
+  if (!res.ok) throw await readProviderError(res, "Gemini", apiKey);
 
-  return sseToTextStream(res, nonce, (event, emit, state) => {
+  return sseToTextStream(res, { nonce, apiKey }, (event, emit, state) => {
     const candidate = event.candidates?.[0];
     for (const part of candidate?.content?.parts ?? []) {
       if (part.text && !part.thought) emit(part.text);
@@ -382,10 +383,10 @@ async function streamClaude({ apiKey, model, text, systemPrompt, signal, nonce }
     signal,
   });
 
-  if (!res.ok) throw await readProviderError(res, "Claude");
+  if (!res.ok) throw await readProviderError(res, "Claude", apiKey);
 
   let stopReason: string | null = null;
-  return sseToTextStream(res, nonce, (event, emit, state) => {
+  return sseToTextStream(res, { nonce, apiKey }, (event, emit, state) => {
     switch (event.type) {
       case "content_block_delta":
         if (event.delta?.type === "text_delta" && event.delta.text) emit(event.delta.text);
@@ -457,18 +458,25 @@ export async function createSimplifyStream({
   const nonce = newStreamNonce();
   const request: ProviderRequest = { apiKey, model: resolvedModel, text, systemPrompt, effort, signal, nonce };
   let stream: ReadableStream;
-  switch (provider) {
-    case "gemini":
-      stream = await streamGemini(request);
-      break;
-    case "claude":
-      stream = await streamClaude(request);
-      break;
-    case "openrouter":
-      stream = await streamOpenAI(request, "https://openrouter.ai/api/v1", { reasoning: { effort } });
-      break;
-    default:
-      stream = isOpenAIReasoningModel(resolvedModel) ? await streamOpenAIResponses(request) : await streamOpenAI(request);
+  try {
+    switch (provider) {
+      case "gemini":
+        stream = await streamGemini(request);
+        break;
+      case "claude":
+        stream = await streamClaude(request);
+        break;
+      case "openrouter":
+        stream = await streamOpenAI(request, "https://openrouter.ai/api/v1", { reasoning: { effort } });
+        break;
+      default:
+        stream = isOpenAIReasoningModel(resolvedModel) ? await streamOpenAIResponses(request) : await streamOpenAI(request);
+    }
+  } catch (e) {
+    // The provider unreachable, or stopped by `signal`
+    if (e instanceof Error && e.name === "AbortError") throw e;
+    const message = e instanceof Error ? e.message : String(e);
+    throw new Error(message === AI_UNAVAILABLE_ERROR ? message : publicAiError(apiKey, message));
   }
   return { stream, nonce };
 }

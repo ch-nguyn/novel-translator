@@ -1,4 +1,5 @@
 import { DEFAULT_AI_MODEL } from "../types";
+import { AI_UNAVAILABLE_ERROR } from "../plan";
 import { auth } from "./auth";
 import { isSubscribed } from "./subscription";
 
@@ -44,6 +45,14 @@ function allowedEmails(): Set<string> {
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean)
   );
+}
+
+// The error a user is shown for a failed AI call: on the app's key, a generic
+// one (the details go to the logs)
+export function publicAiError(apiKey: string, message: string): string {
+  if (!apiKey || apiKey !== systemApiKey()) return redactSystemKey(message);
+  console.error(`[ai] ${redactSystemKey(message).slice(0, 300)}`);
+  return AI_UNAVAILABLE_ERROR;
 }
 
 // The request comes from a signed-in user the app's key is open to

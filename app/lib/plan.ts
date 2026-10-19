@@ -19,3 +19,8 @@ export interface SubscriptionStatus {
     qrUrl: string;
   } | null;
 }
+
+// Error a translation on the plan reports instead of the AI provider's own
+// message (which may name the model, the key or a quota); shown as
+// t.aiUnavailable
+export const AI_UNAVAILABLE_ERROR = "AI_UNAVAILABLE";

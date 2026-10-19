@@ -14,6 +14,8 @@ interface Props {
 
 // While the payment details are shown, the plan is asked for this often
 const POLL_MS = 4000;
+// Waiting this long, the payer is told what to do if the money left their account
+const SLOW_PAYMENT_MS = 3 * 60_000;
 
 export const formatPrice = (vnd: number) => new Intl.NumberFormat("vi-VN").format(vnd);
 
@@ -29,11 +31,17 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
   const [failed, setFailed] = useState(false);
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
+  // Bumped to load the plan again after a failure
+  const [attempt, setAttempt] = useState(0);
+  // The last check for the transfer failed (offline...)
+  const [checkFailed, setCheckFailed] = useState(false);
+  const [slow, setSlow] = useState(false);
   const onPaidRef = useRef(onPaid);
   onPaidRef.current = onPaid;
 
   useEffect(() => {
     const controller = new AbortController();
+    setFailed(false);
     loadStatus(controller.signal).then(
       (loaded) => {
         setStatus(loaded);
@@ -43,7 +51,7 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
       () => !controller.signal.aborted && setFailed(true)
     );
     return () => controller.abort();
-  }, []);
+  }, [attempt]);
 
   // Watches for the transfer while the payment details are open
   const paidUntil = status?.paidUntil ?? null;
@@ -53,16 +61,19 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
     const timer = setInterval(() => {
       loadStatus(controller.signal)
         .then((next) => {
+          setCheckFailed(false);
           if ((next.paidUntil ?? 0) <= (paidUntil ?? 0)) return;
           setStatus(next);
           setPaying(false);
           setPaid(true);
           onPaidRef.current();
         })
-        .catch(() => {});
+        .catch(() => !controller.signal.aborted && setCheckFailed(true));
     }, POLL_MS);
+    const slowTimer = setTimeout(() => setSlow(true), SLOW_PAYMENT_MS);
     return () => {
       clearInterval(timer);
+      clearTimeout(slowTimer);
       controller.abort();
     };
   }, [paying, paidUntil]);
@@ -79,7 +90,19 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
       </div>
       <p className="text-sm" style={{ color: muted }}>{t.planPerks}</p>
 
-      {failed && !status && <p role="alert" className="text-sm text-red-600">{t.planLoadFailed}</p>}
+      {!status && !failed && <p className="text-sm" style={{ color: muted }}>{t.planLoading}</p>}
+      {failed && !status && (
+        <div role="alert" className="flex items-center justify-between gap-3">
+          <p className="text-sm text-red-600">{t.planLoadFailed}</p>
+          <button
+            onClick={() => setAttempt((n) => n + 1)}
+            className="shrink-0 px-3 py-1.5 rounded-lg border text-sm cursor-pointer hover:opacity-70"
+            style={{ borderColor: textColor + "30" }}
+          >
+            {t.retry}
+          </button>
+        </div>
+      )}
       {status && (
         <>
           {status.paidUntil && (
@@ -91,16 +114,18 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
           {!status.payment ? (
             <p className="text-sm" style={{ color: muted }}>{t.planUnavailable}</p>
           ) : paying ? (
-            <PaymentDetails payment={status.payment} textColor={textColor} t={t} />
+            <PaymentDetails payment={status.payment} textColor={textColor} t={t} checkFailed={checkFailed} slow={slow} />
           ) : (
             <button
               onClick={() => {
                 setPaid(false);
+                setCheckFailed(false);
+                setSlow(false);
                 setPaying(true);
               }}
               className="self-start px-4 py-2 rounded-lg text-sm font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
             >
-              {status.active ? t.planRenew : t.planSubscribe}
+              {status.paidUntil ? t.planRenew : t.planSubscribe}
             </button>
           )}
         </>
@@ -109,7 +134,19 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
   );
 }
 
-function PaymentDetails({ payment, textColor, t }: { payment: NonNullable<SubscriptionStatus["payment"]>; textColor: string; t: Translations }) {
+function PaymentDetails({
+  payment,
+  textColor,
+  t,
+  checkFailed,
+  slow,
+}: {
+  payment: NonNullable<SubscriptionStatus["payment"]>;
+  textColor: string;
+  t: Translations;
+  checkFailed: boolean;
+  slow: boolean;
+}) {
   const rows: [string, string, boolean][] = [
     [t.planBank, payment.bank, false],
     [t.planAccount, payment.account, true],
@@ -119,7 +156,10 @@ function PaymentDetails({ payment, textColor, t }: { payment: NonNullable<Subscr
   ];
   return (
     <div className="flex flex-col gap-3">
-      <p className="text-sm font-medium">{t.planPayTitle}</p>
+      <div>
+        <p className="text-sm font-medium">{t.planPayTitle}</p>
+        <p className="text-xs mt-1" style={{ color: textColor + "80" }}>{t.planQrOnPhone}</p>
+      </div>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img src={payment.qrUrl} alt={t.planPayTitle} width={240} height={240} className="self-center w-60 h-60 rounded-lg bg-white" />
       <dl className="flex flex-col gap-1.5 text-sm">
@@ -128,31 +168,37 @@ function PaymentDetails({ payment, textColor, t }: { payment: NonNullable<Subscr
             <dt className="min-w-0" style={{ color: textColor + "80" }}>{label}</dt>
             <dd className={`flex items-center gap-2 font-medium text-right ${copyable ? "whitespace-nowrap" : "break-words"}`}>
               {value}
-              {copyable && <CopyButton value={value} textColor={textColor} t={t} />}
+              {copyable && <CopyButton value={value} label={label} textColor={textColor} t={t} />}
             </dd>
           </div>
         ))}
       </dl>
       <p className="text-xs" style={{ color: textColor + "80" }}>{t.planPayNote}</p>
-      <p role="status" className="text-sm animate-pulse" style={{ color: textColor + "99" }}>{t.planWaiting}</p>
+      <p role="status" className={`text-sm ${checkFailed ? "text-red-600" : "animate-pulse"}`} style={checkFailed ? undefined : { color: textColor + "99" }}>
+        {checkFailed ? t.planCheckFailed : t.planWaiting}
+      </p>
+      {slow && <p className="text-xs" style={{ color: textColor + "99" }}>{t.planSlow.replace("{code}", payment.content)}</p>}
     </div>
   );
 }
 
-function CopyButton({ value, textColor, t }: { value: string; textColor: string; t: Translations }) {
-  const [copied, setCopied] = useState(false);
+function CopyButton({ value, label, textColor, t }: { value: string; label: string; textColor: string; t: Translations }) {
+  const [result, setResult] = useState<"copied" | "failed" | null>(null);
+  const show = (next: "copied" | "failed") => {
+    setResult(next);
+    setTimeout(() => setResult(null), 2000);
+  };
   return (
     <button
-      onClick={() =>
-        navigator.clipboard?.writeText(value).then(() => {
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
-        }, () => {})
-      }
-      className="shrink-0 px-2 py-0.5 rounded border text-xs font-normal cursor-pointer hover:opacity-70"
-      style={{ borderColor: textColor + "30" }}
+      onClick={() => {
+        if (!navigator.clipboard) return show("failed");
+        navigator.clipboard.writeText(value).then(() => show("copied"), () => show("failed"));
+      }}
+      aria-label={`${t.copy}: ${label}`}
+      className="shrink-0 min-h-8 px-3 py-1 rounded border text-xs font-normal cursor-pointer hover:opacity-70"
+      style={{ borderColor: result === "failed" ? "#dc262680" : textColor + "30" }}
     >
-      {copied ? t.copied : t.copy}
+      <span aria-live="polite">{result === "copied" ? t.copied : result === "failed" ? t.copyFailed : t.copy}</span>
     </button>
   );
 }

@@ -36,6 +36,8 @@ interface Props {
   onToggle: (enabled: boolean) => void;
   // Scanning saved chapters needs an API key and saved chapters
   canScan: boolean;
+  // Translating on the monthly plan: scans cost the user nothing
+  systemAI: boolean;
   scanChapters: number;
   // Progress of a running scan
   scan: { done: number; total: number } | null;
@@ -60,6 +62,7 @@ export default function GlossaryPanel({
   enabled,
   onToggle,
   canScan,
+  systemAI,
   scanChapters,
   scan,
   message,
@@ -127,7 +130,7 @@ export default function GlossaryPanel({
           <button
             onClick={onScan}
             disabled={!canScan || !enabled}
-            title={t.scanNamesNote.replace("{n}", String(scanChapters))}
+            title={(systemAI ? t.scanNamesNotePlan : t.scanNamesNote).replace("{n}", String(scanChapters))}
             className={smallButton}
             style={{ borderColor: textColor + "30" }}
           >

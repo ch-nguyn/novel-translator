@@ -171,7 +171,7 @@ export default function AISettingsPanel({ settings, systemAI, textColor, t, onUp
         checked={settings.autoGlossary}
         onChange={(autoGlossary) => onUpdate({ autoGlossary })}
         textColor={textColor}
-        note={t.autoGlossaryNote}
+        note={systemAI ? t.autoGlossaryNotePlan : t.autoGlossaryNote}
       />
 
       {(systemAI || isChatGPT) && <div>
@@ -189,7 +189,7 @@ export default function AISettingsPanel({ settings, systemAI, textColor, t, onUp
           ))}
         </select>
         <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
-          {t.reasoningEffortNote}
+          {systemAI ? t.reasoningEffortNotePlan : t.reasoningEffortNote}
         </p>
       </div>}
 
