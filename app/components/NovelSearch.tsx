@@ -54,7 +54,7 @@ function cacheSearch(key: string, response: SearchResponse) {
 }
 
 // A site's first results; the rest behind "show more"
-const SHOWN_PER_SITE = 5;
+const SHOWN_PER_SITE = 3;
 
 interface Props {
   t: Translations;
