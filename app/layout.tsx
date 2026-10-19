@@ -19,7 +19,7 @@ export const viewport: Viewport = {
 // The service worker (public/sw.js) is only used by the built app.
 const setupScript = `
 window.addEventListener("beforeinstallprompt", function (e) { e.preventDefault(); window.__installPrompt = e; });
-window.addEventListener("appinstalled", function () { window.__installPrompt = null; });
+window.addEventListener("appinstalled", function () { window.__installPrompt = null; try { localStorage.setItem("novel-translator-installed", "1"); } catch (e) {} });
 ${
   process.env.NODE_ENV === "production"
     ? `if ("serviceWorker" in navigator) window.addEventListener("load", function () { navigator.serviceWorker.register("/sw.js").catch(function () {}); });`
