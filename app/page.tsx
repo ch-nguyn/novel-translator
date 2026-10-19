@@ -1233,7 +1233,6 @@ export default function Home() {
         t={t}
         textColor={textColor}
         apiKey={settings.openaiApiKey}
-        systemAI={systemAI}
         library={libraryCounts}
         autoFocus={autoFocus}
         onOpen={openFoundNovel}
@@ -1516,7 +1515,7 @@ export default function Home() {
           onSettings={() => openSettings("speech")}
         />
       )}
-      {settings.autoGlossary && selectedName && !isLoading && overlay === "none" && !renameFrom && currentNovelSlug && (
+      {settings.autoGlossary && systemAI && selectedName && !isLoading && overlay === "none" && !renameFrom && currentNovelSlug && (
         <button
           // Keeps the selection while pressing
           onPointerDown={(e) => e.preventDefault()}
@@ -1625,8 +1624,9 @@ export default function Home() {
                 novelSlug={nothingOpen ? null : currentNovelSlug}
                 enabled={settings.autoGlossary}
                 onToggle={(autoGlossary) => updateSettings({ autoGlossary })}
-                canScan={hasApiKey && currentNovelChapters.length > 0}
+                canScan={systemAI && currentNovelChapters.length > 0}
                 systemAI={systemAI}
+                onSubscribe={() => openSettings("account")}
                 scanChapters={Math.min(SCAN_CHAPTERS, currentNovelChapters.length)}
                 scan={scan}
                 message={glossaryMessage}

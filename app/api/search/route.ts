@@ -1,7 +1,7 @@
 import { hasChinese, MAX_QUERY_CHARS, SearchCandidate, SearchErrorCode } from "../../lib/search";
 import { cacheGuess, guessCandidates, searchNovels } from "../../lib/server/searchNovels";
 import { ModelCallError } from "../../lib/server/llm";
-import { resolveAiAccess } from "../../lib/server/aiAccess";
+import { helperAi } from "../../lib/server/helperAi";
 import { limitRequest } from "../../lib/server/rateLimit";
 
 function fail(code: SearchErrorCode, status: number) {
@@ -11,7 +11,7 @@ function fail(code: SearchErrorCode, status: number) {
 // Finds novels on the supported sites by name. A name typed in Vietnamese or
 // pinyin is first turned into Chinese by the AI; a Chinese one (typed, or a
 // guess picked again from an earlier search) is searched as it is. The AI is
-// called with the app's key or the reader's OpenAI key (see SEARCH_AI_MODEL).
+// the app's (see helperAi).
 export async function POST(req: Request) {
   const limited = await limitRequest(req, "search");
   if (limited) return limited;
@@ -23,8 +23,7 @@ export async function POST(req: Request) {
   }
   if (!body || typeof body !== "object") return fail("invalid", 400);
   const query = typeof body.query === "string" ? body.query.trim() : "";
-  const access = await resolveAiAccess(req, body.apiKey, undefined);
-  const apiKey = access?.apiKey ?? "";
+  const ai = helperAi(req, body.apiKey);
 
   let candidates: SearchCandidate[];
   // A guess the AI just made, kept for everyone if it finds novels
@@ -42,14 +41,15 @@ export async function POST(req: Request) {
     try {
       // A Chinese name is searchable without the AI, which only adds its
       // other script and author (to find it among look-alikes)
-      guess = await guessCandidates(apiKey, query);
+      guess = await guessCandidates(ai, query);
     } catch (e) {
       // Only the user's own key is theirs to fix
-      const rejected = !access?.system && e instanceof ModelCallError && (e.status === 401 || e.status === 403);
+      const rejected = ai?.system === false && e instanceof ModelCallError && (e.status === 401 || e.status === 403);
       if (!chinese) return rejected ? fail("badKey", 401) : fail("aiFailed", 502);
       guess = null;
     }
-    if (guess === null && !chinese) return fail("needKey", 400);
+    // No AI, or this address asked it too much today
+    if (guess === null && !chinese) return ai ? fail("aiFailed", 502) : fail("needKey", 400);
     if (guess?.candidates.length) {
       candidates = guess.candidates;
       freshGuess = guess.fresh;
@@ -60,7 +60,7 @@ export async function POST(req: Request) {
     }
   }
 
-  const response = await searchNovels(candidates, apiKey);
+  const response = await searchNovels(candidates, ai);
   if (freshGuess && response.sites.some((site) => site.results.length > 0)) await cacheGuess(query, candidates);
   return Response.json(response, { headers: { "Cache-Control": "no-store" } });
 }

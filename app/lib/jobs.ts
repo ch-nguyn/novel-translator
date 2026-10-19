@@ -1,6 +1,7 @@
 import { ChapterJob, TranslatedChapter, TranslateOptions } from "./types";
 import { applyNames, mergeTerms, promptTerms } from "./glossary";
 import { ChapterMeta, readErrorMessage } from "./api";
+import { remembersNames } from "./systemAI";
 import {
   deduplicateTitle,
   extractNovelSlug,
@@ -260,8 +261,9 @@ export function saveTranslatedChapter(
   let text = chapter.text;
   // Chapters removed to make room
   let evictedForNames = 0;
-  // Unless the user turned the glossary off
-  if (getSettings().autoGlossary) {
+  // Unless the user turned the glossary off (or is not on the plan). Names
+  // found mean the server saw the plan, though this device may not know yet.
+  if (getSettings().autoGlossary && (remembersNames(getSettings()) || !!chapter.newTerms?.length)) {
     const known = getGlossary(novelSlug);
     const glossary = mergeTerms(known, chapter.newTerms ?? []);
     if (glossary !== known) {

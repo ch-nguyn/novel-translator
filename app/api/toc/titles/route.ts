@@ -1,6 +1,6 @@
 import { hasChinese } from "../../../lib/search";
 import { cachedTranslations } from "../../../lib/server/cachedTranslations";
-import { resolveAiAccess } from "../../../lib/server/aiAccess";
+import { helperAi } from "../../../lib/server/helperAi";
 import { limitRequest } from "../../../lib/server/rateLimit";
 
 // Chapter titles of a table of contents in Vietnamese, for the part the
@@ -26,8 +26,7 @@ export async function POST(req: Request) {
     return Response.json({ error: "Invalid titles" }, { status: 400 });
   }
   const chinese = [...new Set((titles as string[]).filter(hasChinese))];
-  const apiKey = chinese.length > 0 ? ((await resolveAiAccess(req, body?.apiKey, undefined))?.apiKey ?? "") : "";
-  const found = await cachedTranslations(chinese, apiKey, {
+  const found = await cachedTranslations(chinese, helperAi(req, body?.apiKey), {
     prompt: TITLES_PROMPT,
     cacheKey: (title) => `toc:title:${title}`,
     perCall: 25,

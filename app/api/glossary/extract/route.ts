@@ -5,30 +5,28 @@ import { PlanBusyError, takePlanSlot } from "../../../lib/server/planLimits";
 
 export const maxDuration = 60;
 
-const MAX_TEXT_LENGTH = 200_000;
-// On the monthly plan: a chapter's worth (its translation is longer than the Chinese)
-const MAX_PLAN_SOURCE = 50_000;
-const MAX_PLAN_TRANSLATION = 150_000;
+// A chapter's worth (its translation is longer than the Chinese)
+const MAX_SOURCE = 50_000;
+const MAX_TRANSLATION = 150_000;
 
-// The names a translated chapter introduced, for the novel's glossary.
+// The names a translated chapter introduced, for the novel's glossary (on the
+// monthly plan only).
 // Used when a chapter is translated in the tab and to scan saved chapters;
 // background jobs call extractTerms themselves.
 export async function POST(req: Request) {
   try {
     const { apiKey, model, source, translation, known } = await req.json();
     const access = await resolveAiAccess(req, apiKey, model);
-    if (!access) {
-      return Response.json({ error: "API key is required. Set it in Settings." }, { status: 400 });
+    // Remembering names is part of the monthly plan
+    if (!access?.system) {
+      return Response.json({ error: "Remembering names is part of the monthly plan." }, { status: 403 });
     }
     if (
       typeof source !== "string" ||
       typeof translation !== "string" ||
-      source.length > MAX_TEXT_LENGTH ||
-      translation.length > MAX_TEXT_LENGTH
+      source.length > MAX_SOURCE ||
+      translation.length > MAX_TRANSLATION
     ) {
-      return Response.json({ error: "Invalid chapter text" }, { status: 400 });
-    }
-    if (access.system && (source.length > MAX_PLAN_SOURCE || translation.length > MAX_PLAN_TRANSLATION)) {
       return Response.json({ error: "Invalid chapter text" }, { status: 400 });
     }
     const knownTerms = sanitizeTerms(known);
@@ -36,14 +34,12 @@ export async function POST(req: Request) {
       return Response.json({ error: "Invalid glossary" }, { status: 400 });
     }
 
-    let release: (() => Promise<void>) | null = null;
-    if (access.system) {
-      try {
-        release = await takePlanSlot(access.userId!);
-      } catch (e) {
-        if (e instanceof PlanBusyError) return Response.json({ error: e.message }, { status: 429 });
-        throw e;
-      }
+    let release: () => Promise<void>;
+    try {
+      release = await takePlanSlot(access.userId!);
+    } catch (e) {
+      if (e instanceof PlanBusyError) return Response.json({ error: e.message }, { status: 429 });
+      throw e;
     }
     try {
       const terms = await extractTerms({
@@ -55,7 +51,7 @@ export async function POST(req: Request) {
       });
       return Response.json({ terms });
     } finally {
-      await release?.();
+      await release();
     }
   } catch {
     return Response.json({ error: "Invalid request" }, { status: 400 });

@@ -10,13 +10,13 @@ import {
   parseStatus,
   queryKey,
   rankResults,
-  SEARCH_AI_MODEL,
   SearchCandidate,
   SearchResponse,
   SiteResults,
 } from "../search";
 import { complete } from "./llm";
 import { cachedTranslations } from "./cachedTranslations";
+import type { HelperAi } from "./helperAi";
 import { fetchWithCheerio } from "./fetchContent";
 import { getRedis } from "./jobs";
 
@@ -184,8 +184,8 @@ const NAMES_PROMPT = `Transcribe each Chinese web novel title or author name int
 The input is a JSON object of numbered names. Answer with only a JSON object with the same numbers: {"1":"Già Thiên","2":"Thần Đông"}.`;
 
 // Sino-Vietnamese names for `texts`, by text (see cachedTranslations)
-function vietnameseNames(texts: string[], apiKey: string): Promise<Map<string, string>> {
-  return cachedTranslations(texts, apiKey, {
+function vietnameseNames(texts: string[], ai: HelperAi | null): Promise<Map<string, string>> {
+  return cachedTranslations(texts, ai, {
     prompt: NAMES_PROMPT,
     cacheKey: (text) => `search:name:${text}`,
     // A long list comes back with some missing or merged
@@ -196,11 +196,11 @@ function vietnameseNames(texts: string[], apiKey: string): Promise<Map<string, s
 
 // One site's novels with their Sino-Vietnamese names. Each site is named as
 // soon as it answers, while the other is still being searched.
-async function searchAndName(site: NovelSite, candidates: SearchCandidate[], apiKey: string): Promise<SiteResults> {
+async function searchAndName(site: NovelSite, candidates: SearchCandidate[], ai: HelperAi | null): Promise<SiteResults> {
   const found = await searchSite(site, candidates[0]);
   if (!found) return { site: site.domain, results: [], failed: true };
   const results = rankResults(found, candidates);
-  const names = await vietnameseNames([...new Set(results.flatMap((novel) => [novel.title, novel.author]).filter(Boolean))], apiKey);
+  const names = await vietnameseNames([...new Set(results.flatMap((novel) => [novel.title, novel.author]).filter(Boolean))], ai);
   return {
     site: site.domain,
     results: results.map((novel) => ({ ...novel, titleVi: names.get(novel.title), authorVi: names.get(novel.author) })),
@@ -208,9 +208,9 @@ async function searchAndName(site: NovelSite, candidates: SearchCandidate[], api
   };
 }
 
-export async function searchNovels(candidates: SearchCandidate[], apiKey: string): Promise<SearchResponse> {
+export async function searchNovels(candidates: SearchCandidate[], ai: HelperAi | null): Promise<SearchResponse> {
   const searchable = NOVEL_SITES.filter((site) => SITE_SEARCH[site.domain]);
-  return { candidates, sites: await Promise.all(searchable.map((site) => searchAndName(site, candidates, apiKey))) };
+  return { candidates, sites: await Promise.all(searchable.map((site) => searchAndName(site, candidates, ai))) };
 }
 
 const GUESS_PROMPT = `You help find Chinese web novels on Chinese novel sites. The user typed the name of a novel (or of its author) the way Vietnamese readers know it: in Sino-Vietnamese (Hán Việt, e.g. "Già Thiên", "Phàm Nhân Tu Tiên"), translated into Vietnamese, without accents, or in pinyin.
@@ -220,15 +220,15 @@ Give up to 3 candidates, the most likely first. Answer with only this JSON:
 
 // The Chinese names the typed one may stand for, most likely first: as
 // guessed before for the same words (`fresh` false), else by the AI (null
-// without a key; empty when its answer was unusable). A typed Chinese name is
+// without one, or when the address asked it too much; empty when its answer was unusable). A typed Chinese name is
 // searched as it is (the AI adds its other script and author).
-export async function guessCandidates(apiKey: string, query: string): Promise<{ candidates: SearchCandidate[]; fresh: boolean } | null> {
+export async function guessCandidates(ai: HelperAi | null, query: string): Promise<{ candidates: SearchCandidate[]; fresh: boolean } | null> {
   const cached = await cachedGuess(query);
   if (cached) return { candidates: cached, fresh: false };
-  if (!apiKey) return null;
+  if (!ai || !(await ai.allowCall())) return null;
   const answer = await complete({
-    apiKey,
-    model: SEARCH_AI_MODEL,
+    apiKey: ai.apiKey,
+    model: ai.model,
     system: GUESS_PROMPT,
     input: query,
     maxTokens: 400,

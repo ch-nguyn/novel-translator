@@ -45,11 +45,6 @@ export type SearchErrorCode = "needKey" | "badKey" | "aiFailed" | "invalid";
 export const MAX_QUERY_CHARS = 100;
 export const MAX_RESULTS_PER_SITE = 12;
 
-// Searching asks the AI two quick questions (the Chinese name, the results'
-// names in Sino-Vietnamese) that need no reasoning; always this fast model,
-// whatever model translates chapters, with the reader's OpenAI key
-export const SEARCH_AI_MODEL = "gpt-5.6-luna";
-
 const HAN = /\p{Script=Han}/u;
 
 export function hasChinese(text: string): boolean {

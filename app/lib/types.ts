@@ -1,3 +1,5 @@
+import { remembersNames } from "./systemAI";
+
 export interface SavedChapter {
   url: string;
   title: string;
@@ -170,6 +172,6 @@ export function getTranslateOptions(settings: ReaderSettings): TranslateOptions 
     model: settings.aiModel,
     customPrompt: settings.customPrompt,
     reasoningEffort: settings.reasoningEffort,
-    useGlossary: settings.autoGlossary,
+    useGlossary: remembersNames(settings),
   };
 }

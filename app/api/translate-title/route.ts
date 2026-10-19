@@ -1,5 +1,5 @@
 import { translateTitle, translateTitleBatch } from "../../lib/server/translateTitle";
-import { resolveAiAccess } from "../../lib/server/aiAccess";
+import { helperAi } from "../../lib/server/helperAi";
 import { ZH_TITLE_PROMPT } from "../../lib/types";
 import { limitRequest } from "../../lib/server/rateLimit";
 
@@ -17,22 +17,23 @@ export async function POST(req: Request) {
     if (titles !== undefined && (!Array.isArray(titles) || titles.length > MAX_TITLES || !titles.every(isTitle))) {
       return Response.json({ translated: [] });
     }
-    const access = await resolveAiAccess(req, apiKey, model);
-    // The monthly plan translates titles the app's way only
-    const prompt = access?.system && sentPrompt !== ZH_TITLE_PROMPT ? undefined : sentPrompt;
+    // The app's AI (see helperAi), which translates titles its own way only
+    const ai = helperAi(req, apiKey, model);
+    const prompt = ai?.system && sentPrompt !== ZH_TITLE_PROMPT ? undefined : sentPrompt;
 
     // Batch mode: translate multiple titles in a single AI call
-    if (titles && Array.isArray(titles) && titles.length > 0 && access) {
-      const translated = await translateTitleBatch(access.apiKey, access.model, titles, prompt);
+    if (titles && Array.isArray(titles) && titles.length > 0 && ai) {
+      if (!(await ai.allowCall())) return Response.json({ translated: titles });
+      const translated = await translateTitleBatch(ai.apiKey, ai.model, titles, prompt);
       return Response.json({ translated });
     }
 
     // Single mode (backward compatible)
-    if (!title || !access) {
+    if (!title || !ai || !(await ai.allowCall())) {
       return Response.json({ translated: title }, { status: 200 });
     }
 
-    const translated = await translateTitle(access.apiKey, access.model, title, prompt);
+    const translated = await translateTitle(ai.apiKey, ai.model, title, prompt);
     return Response.json({ translated });
   } catch {
     return Response.json({ translated: "" }, { status: 200 });

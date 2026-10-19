@@ -8,7 +8,7 @@ import { createSimplifyStream } from "./simplify";
 import { parseTranslationStream } from "../stream";
 import { translateTitleBatch } from "./translateTitle";
 import { extractTerms } from "./extractTerms";
-import { systemApiKey } from "./aiAccess";
+import { SYSTEM_AI_MODEL, systemApiKey } from "./aiAccess";
 import { countPlanChapter, waitForPlanSlot } from "./planLimits";
 
 // Background translation jobs.
@@ -360,9 +360,14 @@ async function translateChapter(
     let { novelName, chapterName } = content;
     const [titles, newTerms] = await Promise.all([
       content.lang === "zh" && chapterName
-        ? translateTitleBatch(apiKey, step.model, [chapterName, novelName], ZH_TITLE_PROMPT).catch(() => null)
+        ? // On the app's AI for every reader, like the titles of a chapter read in the tab (see helperAi)
+          (systemApiKey()
+            ? translateTitleBatch(systemApiKey(), SYSTEM_AI_MODEL, [chapterName, novelName], ZH_TITLE_PROMPT)
+            : translateTitleBatch(apiKey, step.model, [chapterName, novelName], ZH_TITLE_PROMPT)
+          ).catch(() => null)
         : null,
-      step.useGlossary === false
+      // Remembering names is the plan's (a step started before it was may say otherwise)
+      step.useGlossary === false || !step.system
         ? []
         : extractTerms({
             apiKey,

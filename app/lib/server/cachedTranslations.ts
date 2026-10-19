@@ -1,9 +1,10 @@
-import { parseNames, SEARCH_AI_MODEL } from "../search";
+import { parseNames } from "../search";
 import { complete } from "./llm";
 import { getRedis } from "./jobs";
+import type { HelperAi } from "./helperAi";
 
-// Short texts (novel names, chapter titles) translated by the AI with the
-// reader's OpenAI key, and cached for every reader: a popular novel's names
+// Short texts (novel names, chapter titles) translated by the AI (see
+// helperAi), and cached for every reader: a popular novel's names
 // are then shown without asking the AI again. Every entry expires, so texts
 // nobody looks at any more do not pile up.
 
@@ -22,10 +23,10 @@ export interface TranslationKind {
 }
 
 // The AI's translations of `texts`, in order ("" where it gave none)
-async function ask(texts: string[], apiKey: string, kind: TranslationKind): Promise<string[]> {
+async function ask(texts: string[], ai: HelperAi, kind: TranslationKind): Promise<string[]> {
   const answer = await complete({
-    apiKey,
-    model: SEARCH_AI_MODEL,
+    apiKey: ai.apiKey,
+    model: ai.model,
     system: kind.prompt,
     input: JSON.stringify(Object.fromEntries(texts.map((text, i) => [i + 1, text]))),
     maxTokens: 200 + 40 * texts.length,
@@ -38,8 +39,8 @@ async function ask(texts: string[], apiKey: string, kind: TranslationKind): Prom
 }
 
 // Translations of `texts`, by text: from the cache, else from the AI (when
-// there is a key). Missing when neither has them.
-export async function cachedTranslations(texts: string[], apiKey: string, kind: TranslationKind): Promise<Map<string, string>> {
+// there is one and the address has not asked it too much). Missing when neither has them.
+export async function cachedTranslations(texts: string[], ai: HelperAi | null, kind: TranslationKind): Promise<Map<string, string>> {
   const found = new Map<string, string>();
   if (texts.length === 0) return found;
   const redis = getRedis();
@@ -54,7 +55,7 @@ export async function cachedTranslations(texts: string[], apiKey: string, kind: 
     // only a cache
   }
   const missing = texts.filter((text) => !found.has(text));
-  if (missing.length === 0 || !apiKey) return found;
+  if (missing.length === 0 || !ai) return found;
   const pipeline = redis?.pipeline();
   // In small batches side by side, then once more for any the AI skipped
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -63,7 +64,8 @@ export async function cachedTranslations(texts: string[], apiKey: string, kind: 
     const batches = Array.from({ length: Math.ceil(asking.length / kind.perCall) }, (_, i) => asking.slice(i * kind.perCall, (i + 1) * kind.perCall));
     const answers = await Promise.all(
       batches.map((batch) =>
-        ask(batch, apiKey, kind).catch((e) => {
+        // Each question to the AI counts towards the address's day (see helperAi)
+        (async () => ((await ai.allowCall()) ? ask(batch, ai, kind) : batch.map(() => "")))().catch((e) => {
           console.error(`[${kind.task}] ${e instanceof Error ? e.message : e}`);
           // Still shown, untranslated
           return batch.map(() => "");

@@ -50,13 +50,16 @@ export default function PrivacyPage() {
           Chương máy bạn không tải về bị xóa 7 ngày sau lần dịch nền gần nhất của máy đó.
         </li>
         <li>Khi bạn nghe đọc to bằng giọng AI, đoạn văn đang đọc được gửi tới OpenAI bằng API key của bạn.</li>
-        <li>Tên truyện và tên chương đã dịch được lưu đệm chung để lần sau dịch nhanh hơn. Phần này không gắn với bạn.</li>
+        <li>
+          Tên truyện bạn tìm, tên truyện và tên chương được dịch bằng dịch vụ AI của ứng dụng, không dùng API key của bạn.
+          Chúng được lưu đệm chung để lần sau dịch nhanh hơn. Phần này không gắn với bạn.
+        </li>
       </ul>
 
       <h2>Địa chỉ IP</h2>
       <p>
-        Để chặn việc gửi quá nhiều yêu cầu, máy chủ đếm số lượt tải chương và tìm truyện theo địa chỉ IP của bạn.
-        Số đếm này tự xóa sau vài phút và không gắn với tài khoản của bạn.
+        Để chặn việc gửi quá nhiều yêu cầu, máy chủ đếm số lượt tải chương, tìm truyện và dịch tên theo địa chỉ IP của bạn.
+        Số đếm này tự xóa sau tối đa một ngày và không gắn với tài khoản của bạn.
       </p>
 
       <h2>Khi mua gói tháng</h2>

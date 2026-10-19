@@ -90,8 +90,8 @@ export function readableTocTitle(title: string): string {
 const titleCache = new Map<string, string>();
 
 // Vietnamese titles for `titles` (Chinese), by title; the ones the AI gave
-// none for are missing. Needs the OpenAI key unless another reader's lookup
-// left them in the server's cache.
+// none for are missing. By the app's AI (see helperAi), or from the server's
+// cache when another reader looked them up.
 export async function translateTocTitles(titles: string[], apiKey: string, signal?: AbortSignal): Promise<Map<string, string>> {
   const missing = [...new Set(titles)].filter((title) => !titleCache.has(title));
   if (missing.length > 0) {

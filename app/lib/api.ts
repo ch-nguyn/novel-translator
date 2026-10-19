@@ -3,7 +3,6 @@ import { promptTerms } from "./glossary";
 import { extractNovelSlug, getGlossary } from "./storage";
 import { parseTranslationStream, STREAM_NONCE_HEADER } from "./stream";
 import { SearchCandidate, SearchErrorCode, SearchResponse } from "./search";
-import { hasSystemAI } from "./systemAI";
 
 // Pricing per million tokens: [input, output] in USD
 // Models not listed here have unknown pricing
@@ -122,7 +121,8 @@ export async function translateTitle(
   model: string,
   prompt?: string
 ): Promise<string> {
-  if (!title.trim() || (!apiKey && !hasSystemAI())) return title;
+  // By the app's AI for everyone (see helperAi)
+  if (!title.trim()) return title;
 
   try {
     const res = await fetch("/api/translate-title", {
@@ -146,7 +146,7 @@ export async function translateTitles(
   model: string,
   prompt?: string
 ): Promise<string[]> {
-  if ((!apiKey && !hasSystemAI()) || titles.every((t) => !t.trim())) return titles;
+  if (titles.every((t) => !t.trim())) return titles;
 
   try {
     const res = await fetch("/api/translate-title", {
