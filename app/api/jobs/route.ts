@@ -15,6 +15,7 @@ import {
   sanitizeKnown,
 } from "../../lib/server/jobs";
 import { resolveAiAccess } from "../../lib/server/aiAccess";
+import { planCustomPrompt } from "../../lib/server/planLimits";
 
 export const maxDuration = 300;
 
@@ -60,8 +61,9 @@ export async function POST(req: Request) {
         // The app's key is read again by each step, never passed between them
         apiKey: access.system ? "" : access.apiKey,
         system: access.system,
+        userId: access.userId,
         model: access.model,
-        customPrompt,
+        customPrompt: access.system ? planCustomPrompt(customPrompt) : customPrompt,
         glossary: terms,
         reasoningEffort,
         useGlossary: useGlossary !== false,

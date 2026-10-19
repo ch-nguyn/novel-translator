@@ -9,6 +9,7 @@ import { parseTranslationStream } from "../stream";
 import { translateTitleBatch } from "./translateTitle";
 import { extractTerms } from "./extractTerms";
 import { systemApiKey } from "./aiAccess";
+import { countPlanChapter, waitForPlanSlot } from "./planLimits";
 
 // Background translation jobs.
 //
@@ -45,6 +46,9 @@ const FLUSH_INTERVAL_MS = 1500;
 // A claim not refreshed for this long belongs to a dead worker
 const CLAIM_TTL_SECONDS = 60;
 const HEARTBEAT_INTERVAL_MS = 15_000;
+// How long a chapter on the plan waits for one of the account's slots (see
+// takePlanSlot), e.g. while the chapters left behind by jumps finish
+const PLAN_SLOT_WAIT_MS = 120_000;
 // Upper bound on the chapters a device reports as already saved
 export const MAX_KNOWN_CHAPTERS = 500;
 const CONTINUE_RETRY_DELAYS_MS = [1000, 3000];
@@ -68,8 +72,9 @@ export interface JobStep extends TranslateOptions {
   known: Record<string, string | null>;
   // The novel's glossary, plus the names found by the window's chapters so far
   glossary: GlossaryTerm[];
-  // Runs on the app's key (`apiKey` is then empty)
+  // Runs on the app's key (`apiKey` is then empty), for this user's plan
   system?: boolean;
+  userId?: string;
 }
 
 let redis: Redis | null | undefined;
@@ -297,9 +302,16 @@ async function translateChapter(
     }).catch(() => {});
   }, HEARTBEAT_INTERVAL_MS);
 
+  let release: (() => Promise<void>) | null = null;
   try {
     await save({});
     await db.expire(key, CHAPTER_TTL_SECONDS);
+    if (step.system && step.userId) {
+      // A job replaced meanwhile (the reader went elsewhere) stops waiting
+      release = await waitForPlanSlot(step.userId, PLAN_SLOT_WAIT_MS, () => isCurrentJob(db, step.deviceId, step.jobId));
+      if (!release) return null;
+      await countPlanChapter(step.userId);
+    }
 
     const content = await fetchContent(url);
     await save({
@@ -384,6 +396,7 @@ async function translateChapter(
     return null;
   } finally {
     clearInterval(heartbeat);
+    await release?.();
     await writes;
     await db.eval(OWNED_RELEASE, [claim], [token]).catch(() => {});
   }
@@ -414,6 +427,8 @@ export function signStep(step: JobStep): string {
     step.glossary ?? [],
     step.reasoningEffort ?? null,
     step.useGlossary ?? null,
+    // Last and only when set, so steps signed before it existed still verify
+    ...(step.userId === undefined ? [] : [step.userId]),
   ]);
   return createHmac("sha256", signingKey()).update(payload).digest("hex");
 }

@@ -46,12 +46,17 @@ export function publicAiError(apiKey: string, message: string): string {
   return AI_UNAVAILABLE_ERROR;
 }
 
+// The signed-in user the request comes from, when the app's key is open to them
+async function systemAIUser(headers: Headers): Promise<string | null> {
+  if (!systemApiKey()) return null;
+  const session = await auth.api.getSession({ headers }).catch(() => null);
+  if (!session) return null;
+  return (await isSubscribed(session.user.id).catch(() => false)) ? session.user.id : null;
+}
+
 // The request comes from a signed-in user the app's key is open to
 export async function canUseSystemAI(headers: Headers): Promise<boolean> {
-  if (!systemApiKey()) return false;
-  const session = await auth.api.getSession({ headers }).catch(() => null);
-  if (!session) return false;
-  return isSubscribed(session.user.id).catch(() => false);
+  return (await systemAIUser(headers)) !== null;
 }
 
 export interface AiAccess {
@@ -59,12 +64,15 @@ export interface AiAccess {
   model: string;
   // Paid by the app (the router key and SYSTEM_AI_MODEL)
   system: boolean;
+  // Who it is paid for, when `system`
+  userId?: string;
 }
 
 // The key and model for a request carrying the user's `apiKey` and `model`;
 // null when there is neither the app's key nor the user's
 export async function resolveAiAccess(req: Request, apiKey: unknown, model: unknown): Promise<AiAccess | null> {
-  if (await canUseSystemAI(req.headers)) return { apiKey: systemApiKey(), model: SYSTEM_AI_MODEL, system: true };
+  const userId = await systemAIUser(req.headers);
+  if (userId) return { apiKey: systemApiKey(), model: SYSTEM_AI_MODEL, system: true, userId };
   const key = typeof apiKey === "string" ? apiKey.trim() : "";
   if (!key) return null;
   return { apiKey: key, model: typeof model === "string" && model ? model : DEFAULT_AI_MODEL, system: false };

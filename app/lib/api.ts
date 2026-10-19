@@ -173,12 +173,14 @@ export async function simplifyText(
   onChunk?: (accumulated: string) => void,
   customPrompt?: string,
   glossary?: GlossaryTerm[],
-  reasoningEffort?: string
+  reasoningEffort?: string,
+  // The chapter `text` is from (the monthly plan translates it from there)
+  url?: string
 ): Promise<string> {
   const res = await fetch("/api/simplify", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, apiKey, model, lang: lang || "vi", customPrompt, glossary, reasoningEffort }),
+    body: JSON.stringify({ text, url, apiKey, model, lang: lang || "vi", customPrompt, glossary, reasoningEffort }),
     signal,
   });
 
@@ -270,7 +272,8 @@ export async function translateChapterDirect(
     onText,
     options.customPrompt,
     promptTerms(glossary),
-    options.reasoningEffort
+    options.reasoningEffort,
+    url
   );
 
   let { title, novelName, chapterName } = data;
