@@ -15,6 +15,7 @@ import {
   sanitizeKnown,
 } from "../../lib/server/jobs";
 import { resolveAiAccess } from "../../lib/server/aiAccess";
+import { limitRequest } from "../../lib/server/rateLimit";
 import { planCustomPrompt } from "../../lib/server/planLimits";
 
 export const maxDuration = 300;
@@ -25,6 +26,8 @@ const NOT_CONFIGURED = { error: "Background jobs are not configured (missing Ups
 export async function POST(req: Request) {
   const db = getRedis();
   if (!db) return Response.json(NOT_CONFIGURED, { status: 501 });
+  const limited = await limitRequest(req, "jobs");
+  if (limited) return limited;
 
   try {
     const { deviceId, url, apiKey, model, customPrompt, glossary, useGlossary, reasoningEffort, known, force } = await req.json();

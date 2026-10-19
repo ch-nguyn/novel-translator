@@ -55,11 +55,16 @@ export async function count(key: string, seconds: number): Promise<number> {
 }
 
 // Requests one address may make a minute, by what they make the server do.
-// A reader opens a chapter every few minutes; a search asks every site.
+// A reader opens a chapter every few minutes; a search asks every site; a
+// chapter list asks for names as it is scrolled.
 const PER_MINUTE = {
   fetch: 60,
   toc: 60,
   search: 20,
+  // Background translations started (each fetches chapters)
+  jobs: 30,
+  // Novel and chapter names translated by the AI
+  titles: 30,
 };
 
 // A 429 answer when the request's address went over its limit for `bucket`

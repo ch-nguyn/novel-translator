@@ -1,6 +1,7 @@
 import { hasChinese } from "../../../lib/search";
 import { cachedTranslations } from "../../../lib/server/cachedTranslations";
 import { resolveAiAccess } from "../../../lib/server/aiAccess";
+import { limitRequest } from "../../../lib/server/rateLimit";
 
 // Chapter titles of a table of contents in Vietnamese, for the part the
 // reader is looking at. Cached for every reader (see cachedTranslations).
@@ -12,6 +13,8 @@ const TITLES_PROMPT = `Translate each Chinese web novel chapter title into Vietn
 The input is a JSON object of numbered titles. Answer with only a JSON object with the same numbers: {"1":"Chương 523: Kiếm xuất"}.`;
 
 export async function POST(req: Request) {
+  const limited = await limitRequest(req, "titles");
+  if (limited) return limited;
   let body: { titles?: unknown; apiKey?: unknown } | null;
   try {
     body = await req.json();

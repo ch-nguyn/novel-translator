@@ -1,6 +1,7 @@
 import { translateTitle, translateTitleBatch } from "../../lib/server/translateTitle";
 import { resolveAiAccess } from "../../lib/server/aiAccess";
 import { ZH_TITLE_PROMPT } from "../../lib/types";
+import { limitRequest } from "../../lib/server/rateLimit";
 
 // A chapter's and its novel's name are translated together
 const MAX_TITLES = 20;
@@ -8,6 +9,8 @@ const MAX_TITLE_CHARS = 200;
 const isTitle = (title: unknown) => typeof title === "string" && title.length <= MAX_TITLE_CHARS;
 
 export async function POST(req: Request) {
+  const limited = await limitRequest(req, "titles");
+  if (limited) return limited;
   try {
     const { title, titles, apiKey, model, prompt: sentPrompt } = await req.json();
     if (title !== undefined && !isTitle(title)) return Response.json({ translated: "" });

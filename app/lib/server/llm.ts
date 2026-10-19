@@ -56,6 +56,9 @@ function responsesOutputText(data: {
     .join("");
 }
 
+// Output tokens a reasoning model may spend thinking before a short answer
+const REASONING_ROOM = 4000;
+
 // The model's answer, trimmed; empty if it gave none. Throws ModelCallError
 // when the provider rejects the request.
 export async function complete({ apiKey, model, system, input, maxTokens, task, reasoningEffort = "low" }: CompleteParams): Promise<string> {
@@ -67,7 +70,8 @@ export async function complete({ apiKey, model, system, input, maxTokens, task, 
       fetch(`${openAIBaseUrl(apiKey)}/responses`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model, instructions: system, input, reasoning: { effort } }),
+        // Room for the model's reasoning on top of the answer
+        body: JSON.stringify({ model, instructions: system, input, reasoning: { effort }, max_output_tokens: maxTokens + REASONING_ROOM }),
       });
     let res = await call(reasoningEffort);
     // Models that must reason a little reject "none"

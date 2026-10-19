@@ -47,8 +47,12 @@ export async function POST(req: Request) {
         if (e instanceof PlanBusyError) return Response.json({ error: e.message }, { status: 429 });
         throw e;
       }
-      // The reader went away (closed the app, opened another chapter)
+      // The reader went away (closed the app, opened another chapter), maybe already
       req.signal.addEventListener("abort", () => release?.());
+      if (req.signal.aborted) {
+        await release();
+        return new Response(null, { status: 499 });
+      }
       try {
         ({ text, lang } = await fetchContent(url, undefined, clientIp(req)));
       } catch (e) {
