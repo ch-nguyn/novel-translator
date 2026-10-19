@@ -87,7 +87,7 @@ export default function GlossaryPanel({
       checked={enabled}
       onChange={onToggle}
       textColor={textColor}
-      note={enabled ? t.namesHint : t.glossaryOff}
+      note={(enabled ? t.namesHint : t.glossaryOff) + (systemAI ? "" : " " + t.namesCostNote)}
     />
   );
 

@@ -61,6 +61,8 @@ interface Props {
   textColor: string;
   // The OpenAI key: searching uses a fixed OpenAI model (see SEARCH_AI_MODEL)
   apiKey: string;
+  // On the monthly plan: the AI's help costs the user nothing
+  systemAI: boolean;
   // Saved chapters per novel slug: those novels open where the reader left off
   library: Map<string, number>;
   autoFocus?: boolean;
@@ -68,7 +70,7 @@ interface Props {
 }
 
 // Finding a novel on the supported sites by its name, in Vietnamese or Chinese
-export default function NovelSearch({ t, textColor, apiKey, library, autoFocus, onOpen }: Props) {
+export default function NovelSearch({ t, textColor, apiKey, systemAI, library, autoFocus, onOpen }: Props) {
   const [state, setState] = useState<SearchState>(lastSearch);
   const [searching, setSearching] = useState(false);
   // Sites whose every result is shown
@@ -241,6 +243,12 @@ export default function NovelSearch({ t, textColor, apiKey, library, autoFocus, 
           {t.search}
         </button>
       </form>
+
+      {!systemAI && !response && !searching && !error && (
+        <p className="text-xs" style={{ color: muted }}>
+          {t.searchCostNote}
+        </p>
+      )}
 
       <div aria-live="polite" className="flex flex-col gap-2 empty:hidden">
         {searching && (

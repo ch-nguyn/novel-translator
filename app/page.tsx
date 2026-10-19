@@ -1073,6 +1073,7 @@ export default function Home() {
         t={t}
         textColor={textColor}
         apiKey={settings.openaiApiKey}
+        systemAI={systemAI}
         library={libraryCounts}
         autoFocus={autoFocus}
         onOpen={openFoundNovel}
