@@ -1,4 +1,5 @@
 import { resolveChapterUrl, FetchContentError } from "../../lib/server/fetchContent";
+import { limitRequest } from "../../lib/server/rateLimit";
 
 // Turns a novel's page link into its first chapter's link
 export async function POST(req: Request) {
@@ -9,6 +10,8 @@ export async function POST(req: Request) {
       return Response.json({ error: "Missing URL" }, { status: 400 });
     }
 
+    const limited = await limitRequest(req, "fetch");
+    if (limited) return limited;
     return Response.json({ url: await resolveChapterUrl(url) });
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : "Internal server error";

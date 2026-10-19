@@ -2,6 +2,7 @@ import { hasChinese, MAX_QUERY_CHARS, SearchCandidate, SearchErrorCode } from ".
 import { cacheGuess, guessCandidates, searchNovels } from "../../lib/server/searchNovels";
 import { ModelCallError } from "../../lib/server/llm";
 import { resolveAiAccess } from "../../lib/server/aiAccess";
+import { limitRequest } from "../../lib/server/rateLimit";
 
 function fail(code: SearchErrorCode, status: number) {
   return Response.json({ error: code }, { status });
@@ -12,6 +13,8 @@ function fail(code: SearchErrorCode, status: number) {
 // guess picked again from an earlier search) is searched as it is. The AI is
 // called with the app's key or the reader's OpenAI key (see SEARCH_AI_MODEL).
 export async function POST(req: Request) {
+  const limited = await limitRequest(req, "search");
+  if (limited) return limited;
   let body: { query?: unknown; candidate?: unknown; apiKey?: unknown } | null;
   try {
     body = await req.json();

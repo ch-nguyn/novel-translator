@@ -23,7 +23,8 @@ export default function PrivacyPage() {
       <h2>Dữ liệu lưu trên máy của bạn</h2>
       <p>
         Thư viện truyện, các chương đã dịch và bảng tên riêng nằm trong bộ nhớ trình duyệt trên máy của bạn.
-        Các chương đã dịch không bao giờ được tải lên máy chủ của ứng dụng. Xóa dữ liệu trang web trong trình duyệt là xóa hết những thứ này trên máy đó.
+        Các chương đã dịch chỉ được lưu trên máy của bạn; máy chủ chỉ giữ tạm những chương đang dịch nền (xem bên dưới).
+        Xóa dữ liệu trang web trong trình duyệt là xóa hết những thứ này trên máy đó.
       </p>
 
       <h2>Khi đã đăng nhập</h2>
@@ -44,9 +45,19 @@ export default function PrivacyPage() {
           Máy chủ chỉ dùng API key cho lượt dịch đó.
         </li>
         <li>Khi bạn dùng gói tháng, nội dung chương được gửi tới dịch vụ AI của ứng dụng thay cho API key của bạn.</li>
-        <li>Khi dịch chạy nền, chương đã dịch được giữ tạm trên máy chủ tối đa 7 ngày cho tới khi máy của bạn tải về.</li>
+        <li>
+          Khi dịch chạy nền (dịch trước vài chương tiếp theo), chương đã dịch được giữ tạm trên máy chủ cho tới khi máy của bạn tải về, rồi xóa.
+          Chương máy bạn không tải về bị xóa 7 ngày sau lần dịch nền gần nhất của máy đó.
+        </li>
+        <li>Khi bạn nghe đọc to bằng giọng AI, đoạn văn đang đọc được gửi tới OpenAI bằng API key của bạn.</li>
         <li>Tên truyện và tên chương đã dịch được lưu đệm chung để lần sau dịch nhanh hơn. Phần này không gắn với bạn.</li>
       </ul>
+
+      <h2>Địa chỉ IP</h2>
+      <p>
+        Để chặn việc gửi quá nhiều yêu cầu, máy chủ đếm số lượt tải chương và tìm truyện theo địa chỉ IP của bạn.
+        Số đếm này tự xóa sau vài phút và không gắn với tài khoản của bạn.
+      </p>
 
       <h2>Khi mua gói tháng</h2>
       <p>

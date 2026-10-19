@@ -1,5 +1,6 @@
 import { FetchContentError } from "../../lib/server/fetchContent";
 import { fetchToc, fetchTocSummary } from "../../lib/server/fetchToc";
+import { limitRequest } from "../../lib/server/rateLimit";
 
 // A long novel's list takes a few dozen pages on some sites
 export const maxDuration = 60;
@@ -13,6 +14,8 @@ export async function GET(req: Request) {
   const params = new URL(req.url).searchParams;
   const url = params.get("url");
   if (!url || url.length > 2048) return Response.json({ error: "Missing URL" }, { status: 400 });
+  const limited = await limitRequest(req, "toc");
+  if (limited) return limited;
   try {
     const body = params.get("summary") === "1" ? await fetchTocSummary(url) : await fetchToc(url);
     return Response.json(body, { headers: CACHE_HEADERS });

@@ -1,6 +1,7 @@
 import * as cheerio from "cheerio";
 import { lookup } from "dns/promises";
 import { bookPageUrl, canonicalUrl, findSite, isChapterUrl, mirrorUrls } from "../sites";
+import { BrowserBusyError, BrowserLimitError, withBrowserSlot } from "./rateLimit";
 
 interface SiteConfig {
   content: string;
@@ -348,10 +349,13 @@ async function fetchWithPuppeteer(url: string): Promise<FetchedPage> {
     args = chromium.default.args;
   }
 
+  // Every step is bounded, so a run ends well within its slot (see withBrowserSlot)
   const browser = await puppeteer.default.launch({
     args,
     executablePath,
     headless: true,
+    timeout: 30_000,
+    protocolTimeout: 30_000,
   });
 
   try {
@@ -457,7 +461,8 @@ export interface ChapterContent {
   lang: "vi" | "zh";
 }
 
-export async function fetchContent(url: string, providedHtml?: string): Promise<ChapterContent> {
+// `ip`: the reader's address when they asked for the chapter themselves (see withBrowserSlot)
+export async function fetchContent(url: string, providedHtml?: string, ip?: string): Promise<ChapterContent> {
   const siteConfig = getSiteConfig(url);
   if (!siteConfig) {
     const supported = Object.keys(SITE_SELECTORS).join(", ");
@@ -470,7 +475,13 @@ export async function fetchContent(url: string, providedHtml?: string): Promise<
   let page = providedHtml ? { html: providedHtml, url } : await fetchFromSiteOrMirror(url, hasChapter);
 
   if (!page) {
-    page = await fetchWithPuppeteer(url);
+    try {
+      page = await withBrowserSlot(ip, () => fetchWithPuppeteer(url));
+    } catch (e) {
+      if (e instanceof BrowserLimitError) throw new FetchContentError("Too many requests from your network. Please wait a few minutes and try again.", 429);
+      if (e instanceof BrowserBusyError) throw new FetchContentError("Many readers are loading chapters right now. Please try again in a moment.", 503);
+      throw e;
+    }
   }
 
   // Parse with the selectors of the site the page ended up on after redirects
