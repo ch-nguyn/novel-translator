@@ -4,6 +4,7 @@ import { ReaderSettings } from "../lib/types";
 import { Translations } from "../lib/i18n";
 import DisplaySettings from "./DisplaySettings";
 import Switch from "./Switch";
+import InstallApp from "./InstallApp";
 
 interface Props {
   settings: ReaderSettings;
@@ -15,6 +16,8 @@ interface Props {
 export default function GeneralSettings({ settings, textColor, t, onUpdate }: Props) {
   return (
     <div className="flex flex-col gap-5">
+      <InstallApp textColor={textColor} t={t} />
+
       <div>
         <label className="text-sm font-medium block mb-2">{t.language}</label>
         <select

@@ -22,15 +22,19 @@ export default function PrivacyPage() {
 
       <h2>Dữ liệu lưu trên máy của bạn</h2>
       <p>
-        Thư viện truyện, các chương đã dịch và bảng tên riêng nằm trong bộ nhớ trình duyệt trên máy của bạn,
-        không được tải lên máy chủ của ứng dụng. Xóa dữ liệu trang web trong trình duyệt là xóa hết những thứ này.
+        Thư viện truyện, các chương đã dịch và bảng tên riêng nằm trong bộ nhớ trình duyệt trên máy của bạn.
+        Các chương đã dịch không bao giờ được tải lên máy chủ của ứng dụng. Xóa dữ liệu trang web trong trình duyệt là xóa hết những thứ này trên máy đó.
       </p>
 
-      <h2>Cài đặt khi đã đăng nhập</h2>
+      <h2>Khi đã đăng nhập</h2>
       <p>
         Khi bạn đăng nhập, cài đặt của bạn (model AI, prompt, cỡ chữ, màu nền, cách đọc to...) và API key bạn nhập được lưu vào tài khoản
         để dùng được trên mọi thiết bị. API key được mã hóa trước khi lưu và chỉ được giải mã khi gửi lại cho chính bạn.
         Khi chưa đăng nhập, những thứ này chỉ nằm trên máy của bạn.
+      </p>
+      <p>
+        Khi đăng nhập, tủ truyện của bạn (tên truyện, chương và đoạn bạn đang đọc tới) và bảng tên riêng của từng truyện cũng được lưu vào tài khoản
+        để đọc tiếp được trên thiết bị khác. Xóa một truyện khỏi tủ là xóa nó khỏi tài khoản và các thiết bị khác của bạn.
       </p>
 
       <h2>Khi dịch truyện</h2>

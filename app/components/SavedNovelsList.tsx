@@ -4,7 +4,7 @@ import { useState } from "react";
 import { SavedChapter } from "../lib/types";
 import { Translations } from "../lib/i18n";
 import { foldAccents } from "../lib/search";
-import { NovelUpdate } from "../lib/storage";
+import { Library, NovelUpdate } from "../lib/storage";
 
 // With fewer novels the whole list fits on screen; no filter box
 const FILTER_FROM = 5;
@@ -12,11 +12,15 @@ const FILTER_FROM = 5;
 interface NovelInfo {
   slug: string;
   name: string;
+  // The chapter the reader is on
+  chapterTitle: string;
   chapterCount: number;
   lastRead: number;
 }
 
 interface Props {
+  // The shelf, and the chapters saved on this device
+  library: Library;
   chapters: SavedChapter[];
   // What each novel's site listed when last checked
   updates: Record<string, NovelUpdate>;
@@ -29,27 +33,42 @@ interface Props {
   onClearNovel: (slug: string) => void;
 }
 
-function getNovelName(chapters: SavedChapter[]): string {
-  return chapters[0]?.novelName || chapters[0]?.novelSlug || "Unknown";
-}
-
-function getNovels(chapters: SavedChapter[]): NovelInfo[] {
+// The novels on the shelf, most recently read first; also any with saved
+// chapters but no place on the shelf (it could not be stored)
+function getNovels(library: Library, chapters: SavedChapter[]): NovelInfo[] {
   const map = new Map<string, SavedChapter[]>();
   for (const ch of chapters) {
     const slug = ch.novelSlug || "unknown";
     if (!map.has(slug)) map.set(slug, []);
     map.get(slug)!.push(ch);
   }
-
-  return Array.from(map.entries()).map(([slug, chs]) => ({
-    slug,
-    name: getNovelName(chs),
-    chapterCount: chs.length,
-    lastRead: Math.max(...chs.map((c) => c.savedAt)),
-  })).sort((a, b) => b.lastRead - a.lastRead);
+  const novels: NovelInfo[] = [];
+  for (const [slug, entry] of Object.entries(library)) {
+    if (entry.removed) continue;
+    const saved = map.get(slug) ?? [];
+    novels.push({
+      slug,
+      name: entry.name || saved.find((c) => c.novelName)?.novelName || slug,
+      chapterTitle: entry.chapterTitle,
+      chapterCount: saved.length,
+      lastRead: entry.updatedAt,
+    });
+  }
+  for (const [slug, saved] of map) {
+    if (library[slug] && !library[slug].removed) continue;
+    novels.push({
+      slug,
+      name: saved.find((c) => c.novelName)?.novelName || slug,
+      chapterTitle: "",
+      chapterCount: saved.length,
+      lastRead: Math.max(...saved.map((c) => c.savedAt)),
+    });
+  }
+  return novels.sort((a, b) => b.lastRead - a.lastRead);
 }
 
 export default function SavedNovelsList({
+  library,
   chapters,
   updates,
   checking,
@@ -61,7 +80,7 @@ export default function SavedNovelsList({
   onClearNovel,
 }: Props) {
   const [filter, setFilter] = useState("");
-  const novels = getNovels(chapters);
+  const novels = getNovels(library, chapters);
   // Accents optional: "pham nhan" finds "Phàm Nhân Tu Tiên"
   const query = foldAccents(filter.trim());
   const shown = query ? novels.filter((novel) => foldAccents(novel.name).includes(query)) : novels;
@@ -122,10 +141,17 @@ export default function SavedNovelsList({
                 <p className="text-sm font-medium truncate" style={{ color: isActive ? "#3b82f6" : undefined }}>
                   {novel.name}
                 </p>
+                {novel.chapterTitle && (
+                  <p className="text-xs truncate" style={{ color: textColor + "99" }}>
+                    {t.readingAt.replace("{chapter}", novel.chapterTitle)}
+                  </p>
+                )}
                 <p className="text-xs" style={{ color: textColor + "60" }}>
-                  {update
-                    ? `${novel.chapterCount} ${t.savedChapters.toLowerCase()} · ${update.total} ${t.chapters.toLowerCase()}`
-                    : `${novel.chapterCount} ${t.chapters.toLowerCase()}`}
+                  {novel.chapterCount === 0
+                    ? t.noChaptersHere + (update ? ` · ${update.total} ${t.chapters.toLowerCase()}` : "")
+                    : update
+                      ? `${novel.chapterCount} ${t.savedChapters.toLowerCase()} · ${update.total} ${t.chapters.toLowerCase()}`
+                      : `${novel.chapterCount} ${t.chapters.toLowerCase()}`}
                   {fresh > 0 && (
                     <span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-medium text-white bg-blue-500">
                       {t.newChapters.replace("{n}", String(fresh))}

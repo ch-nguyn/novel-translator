@@ -12,10 +12,17 @@ const SCROLL_KEY = "novel-translator-scroll";
 const DEVICE_KEY = "novel-translator-device-id";
 const CLEARED_NOVELS_KEY = "novel-translator-cleared-novels";
 const PENDING_WINDOW_KEY = "novel-translator-pending-window";
-// The chapter last opened in each novel, by novel slug
+// The chapter last opened in each novel, by novel slug; replaced by LIBRARY_KEY
 const LAST_READ_KEY = "novel-translator-last-read";
-// Novels whose reading position is kept; the least recently read go first
-const MAX_LAST_READ = 200;
+// The bookshelf (see LibraryEntry), by novel slug
+const LIBRARY_KEY = "novel-translator-library";
+// Novels on the shelf, deleted ones included; the least recently read go first
+const MAX_LIBRARY = 300;
+// When each novel's glossary last changed and was last in step with the
+// account (see GlossarySync), by novel slug
+const GLOSSARY_SYNC_KEY = "novel-translator-glossary-sync";
+// The account the shelf and names were last synced with
+const LIBRARY_ACCOUNT_KEY = "novel-translator-library-account";
 // What the novels' sites listed when last checked, by novel slug (see NovelUpdate)
 const NOVEL_UPDATES_KEY = "novel-translator-novel-updates";
 // One key per novel: `${GLOSSARY_KEY_PREFIX}${novelSlug}`
@@ -134,7 +141,10 @@ function removeOrphanGlossaries(chapters: SavedChapter[], keepSlug: string): boo
     const key = localStorage.key(i);
     if (key?.startsWith(GLOSSARY_KEY_PREFIX) && !slugs.has(key.slice(GLOSSARY_KEY_PREFIX.length))) orphans.push(key);
   }
-  for (const key of orphans) localStorage.removeItem(key);
+  for (const key of orphans) {
+    localStorage.removeItem(key);
+    forgetGlossarySync(key.slice(GLOSSARY_KEY_PREFIX.length));
+  }
   return orphans.length > 0;
 }
 
@@ -163,6 +173,7 @@ export function saveChapter(chapter: SavedChapter): number {
   while (true) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
+      shelveNovel(chapter);
       return evicted;
     } catch (e) {
       if (!isQuotaError(e)) throw e;
@@ -210,17 +221,27 @@ export function rewriteNovelChapters(novelSlug: string, rewrite: (text: string) 
   }
 }
 
+// Deletes a novel: its chapters, names and place on the shelf (on every
+// device of a signed-in user)
 export function clearNovelChapters(novelSlug: string) {
+  removeNovelData(novelSlug);
+  updateLibrary((library) => {
+    const entry = library[novelSlug];
+    if (entry) library[novelSlug] = { ...entry, removed: true, updatedAt: nextUpdatedAt(entry), dirty: true };
+  });
+}
+
+// What a deleted novel leaves on this device
+function removeNovelData(novelSlug: string) {
   const chapters = getSavedChapters().filter((c) => c.novelSlug !== novelSlug);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
   const cleared = getClearedNovels();
   cleared.add(novelSlug);
   localStorage.setItem(CLEARED_NOVELS_KEY, JSON.stringify([...cleared]));
   localStorage.removeItem(GLOSSARY_KEY_PREFIX + novelSlug);
+  forgetGlossarySync(novelSlug);
   const { [novelSlug]: _update, ...updates } = getNovelUpdates();
   localStorage.setItem(NOVEL_UPDATES_KEY, JSON.stringify(updates));
-  const { [novelSlug]: _lastRead, ...lastRead } = getLastReadMap();
-  localStorage.setItem(LAST_READ_KEY, JSON.stringify(lastRead));
   // Clear current URL if it belonged to this novel
   const currentUrl = getCurrentUrl();
   if (currentUrl && extractNovelSlug(currentUrl) === novelSlug) {
@@ -250,33 +271,235 @@ export function getCurrentUrl(): string | null {
   return localStorage.getItem(CURRENT_KEY);
 }
 
-function getLastReadMap(): Record<string, string> {
+// A novel on the reader's shelf. Kept apart from the saved chapters (which
+// come and go) and, for a signed-in user, synced with the account
+// (app/lib/librarySync.ts): the latest change to a novel wins.
+export interface LibraryEntry {
+  name: string;
+  // The chapter last opened in it, and the paragraph at the top of the screen
+  // there (unlike a scroll offset, the same on every device)
+  url: string;
+  chapterTitle: string;
+  paragraph: number;
+  // When it last changed, here or on another device
+  updatedAt: number;
+  // Deleted; kept so the deletion reaches the other devices
+  removed?: boolean;
+  // Changed here and not sent to the account yet
+  dirty?: boolean;
+}
+
+export type Library = Record<string, LibraryEntry>;
+
+// Called when the shelf or a glossary changes here (not when another device's
+// change is applied), so it can be sent to the account
+const localChangeListeners = new Set<() => void>();
+
+export function onLocalLibraryChange(listener: () => void): () => void {
+  localChangeListeners.add(listener);
+  return () => localChangeListeners.delete(listener);
+}
+
+function notifyLocalChange() {
+  for (const listener of localChangeListeners) listener();
+}
+
+export function getLibrary(): Library {
   try {
-    const map = JSON.parse(localStorage.getItem(LAST_READ_KEY) || "{}");
-    return map && typeof map === "object" && !Array.isArray(map) ? map : {};
+    const stored = localStorage.getItem(LIBRARY_KEY);
+    if (stored === null) return migrateLibrary();
+    const library = JSON.parse(stored);
+    return library && typeof library === "object" && !Array.isArray(library) ? library : {};
   } catch {
     return {};
+  }
+}
+
+// The shelf from before it existed: the novels with saved chapters, each at
+// the chapter last opened in it (else the latest saved)
+function migrateLibrary(): Library {
+  let lastRead: Record<string, unknown> = {};
+  try {
+    lastRead = JSON.parse(localStorage.getItem(LAST_READ_KEY) || "{}") ?? {};
+  } catch {
+    // none
+  }
+  const library: Library = {};
+  const chapters = [...getSavedChapters()].sort((a, b) => b.savedAt - a.savedAt);
+  for (const c of chapters) {
+    if (library[c.novelSlug]) continue;
+    const novelChapters = chapters.filter((other) => other.novelSlug === c.novelSlug);
+    const opened = novelChapters.find((other) => other.url === lastRead[c.novelSlug]) ?? c;
+    library[c.novelSlug] = {
+      name: novelChapters.find((other) => other.novelName)?.novelName ?? "",
+      url: opened.url,
+      chapterTitle: opened.title,
+      paragraph: 0,
+      updatedAt: c.savedAt,
+      dirty: true,
+    };
+  }
+  saveLibrary(library);
+  localStorage.removeItem(LAST_READ_KEY);
+  return library;
+}
+
+function saveLibrary(library: Library) {
+  let entries = Object.entries(library);
+  if (entries.length > MAX_LIBRARY) {
+    // Changes not sent yet stay (a deletion would come back otherwise); then
+    // deleted novels go first, then the least recently read
+    const rank = (entry: LibraryEntry) => (entry.dirty ? 0 : entry.removed ? 2 : 1);
+    entries = entries
+      .sort(([, a], [, b]) => rank(a) - rank(b) || b.updatedAt - a.updatedAt)
+      .slice(0, MAX_LIBRARY);
+  }
+  try {
+    localStorage.setItem(LIBRARY_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch {
+    // storage full; the shelf is rebuilt from the account or the chapters
+  }
+}
+
+// Later than the entry's last change, even if another device's clock is ahead
+function nextUpdatedAt(entry: LibraryEntry | undefined): number {
+  return Math.max(Date.now(), (entry?.updatedAt ?? 0) + 1);
+}
+
+// Changes the shelf in place; a change made here (an entry marked dirty) is
+// reported to onLocalLibraryChange listeners
+function updateLibrary(change: (library: Library) => void) {
+  const library = getLibrary();
+  const before = JSON.stringify(library);
+  change(library);
+  if (JSON.stringify(library) === before) return;
+  saveLibrary(library);
+  notifyLocalChange();
+}
+
+// Sets a novel's entry fields; nothing changes if they are already so
+function setLibraryEntry(novelSlug: string, fields: Omit<LibraryEntry, "updatedAt" | "removed" | "dirty">) {
+  updateLibrary((library) => {
+    const entry = library[novelSlug];
+    if (
+      entry &&
+      !entry.removed &&
+      // Another account's (see detachLibrary): reading it now sends it to this one
+      entry.updatedAt > 0 &&
+      entry.name === fields.name &&
+      entry.url === fields.url &&
+      entry.chapterTitle === fields.chapterTitle &&
+      entry.paragraph === fields.paragraph
+    ) {
+      return;
+    }
+    library[novelSlug] = { ...fields, updatedAt: nextUpdatedAt(entry), dirty: true };
+  });
+}
+
+// A chapter was saved: its novel is on the shelf, with its name
+function shelveNovel(chapter: SavedChapter) {
+  const entry = getLibrary()[chapter.novelSlug];
+  if (entry?.removed) return;
+  if (!entry) {
+    setLibraryEntry(chapter.novelSlug, { name: chapter.novelName, url: chapter.url, chapterTitle: chapter.title, paragraph: 0 });
+  } else if (!entry.name && chapter.novelName) {
+    setLibraryEntry(chapter.novelSlug, { ...entry, name: chapter.novelName });
   }
 }
 
 // The chapter the reader last opened in a novel. Not the most recently saved
 // one: chapters translated ahead are saved after the one being read.
 export function getLastReadUrl(novelSlug: string): string | null {
-  const url = getLastReadMap()[novelSlug];
-  return typeof url === "string" ? url : null;
+  const entry = getLibrary()[novelSlug];
+  return entry && !entry.removed ? entry.url : null;
 }
 
-export function setCurrentUrl(url: string) {
+// The chapter the reader is on (and so their place in its novel). `info`
+// fills in what the shelf shows when it is known.
+export function setCurrentUrl(url: string, info: { novelName?: string; chapterTitle?: string } = {}) {
   try {
     localStorage.setItem(CURRENT_KEY, url);
-    // Re-inserted last, so the map stays in reading order for trimming
-    const { [extractNovelSlug(url)]: _previous, ...others } = getLastReadMap();
-    const entries = [...Object.entries(others), [extractNovelSlug(url), url]].slice(-MAX_LAST_READ);
-    localStorage.setItem(LAST_READ_KEY, JSON.stringify(Object.fromEntries(entries)));
-    markNovelSeen(extractNovelSlug(url));
   } catch {
     // storage full; losing the resume position is harmless
   }
+  const slug = extractNovelSlug(url);
+  const entry = getLibrary()[slug];
+  const same = entry && !entry.removed && entry.url === url;
+  setLibraryEntry(slug, {
+    name: info.novelName || entry?.name || getSavedChapters().find((c) => c.novelSlug === slug && c.novelName)?.novelName || "",
+    url,
+    chapterTitle: info.chapterTitle ?? (same ? entry.chapterTitle : getSavedChapters().find((c) => c.url === url)?.title ?? ""),
+    paragraph: same ? entry.paragraph : 0,
+  });
+  markNovelSeen(slug);
+}
+
+// The reader scrolled to `paragraph` of the chapter `url`
+export function setReadingParagraph(url: string, paragraph: number) {
+  const slug = extractNovelSlug(url);
+  const entry = getLibrary()[slug];
+  if (!entry || entry.removed || entry.url !== url || entry.paragraph === paragraph) return;
+  setLibraryEntry(slug, { ...entry, paragraph });
+}
+
+// Another device's change to a novel, newer than this device's entry.
+// A deleted novel is deleted here too.
+export function applyRemoteNovel(novelSlug: string, remote: Omit<LibraryEntry, "dirty">) {
+  const entry = getLibrary()[novelSlug];
+  if (remote.removed) {
+    removeNovelData(novelSlug);
+  } else {
+    reviveNovel(novelSlug);
+    // The scroll offset kept here is older than the paragraph the reader got to there
+    if (!entry || entry.url !== remote.url || entry.paragraph !== remote.paragraph) forgetScrollPosition(remote.url);
+  }
+  const library = getLibrary();
+  library[novelSlug] = { ...remote };
+  saveLibrary(library);
+}
+
+// Sent to the account: the entry is no longer dirty unless it changed meanwhile
+export function markNovelSynced(novelSlug: string, updatedAt: number) {
+  const library = getLibrary();
+  const entry = library[novelSlug];
+  if (!entry?.dirty || entry.updatedAt !== updatedAt) return;
+  delete entry.dirty;
+  saveLibrary(library);
+}
+
+export function getLibraryAccount(): string | null {
+  return localStorage.getItem(LIBRARY_ACCOUNT_KEY);
+}
+
+export function setLibraryAccount(userId: string) {
+  localStorage.setItem(LIBRARY_ACCOUNT_KEY, userId);
+}
+
+// Another account signs in on this device: the shelf and names here were
+// another account's, so they are not sent to this one; the account's own
+// replace them (a novel read here again is sent as usual)
+export function detachLibrary() {
+  const library = getLibrary();
+  for (const [slug, entry] of Object.entries(library)) {
+    if (entry.removed) delete library[slug];
+    else library[slug] = { ...entry, updatedAt: 0, dirty: undefined };
+  }
+  saveLibrary(library);
+  const syncs: Record<string, GlossarySync> = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(GLOSSARY_KEY_PREFIX)) syncs[key.slice(GLOSSARY_KEY_PREFIX.length)] = { updatedAt: 0, syncedAt: 0 };
+  }
+  try {
+    localStorage.setItem(GLOSSARY_SYNC_KEY, JSON.stringify(syncs));
+  } catch {
+    // ignore
+  }
+}
+
+export function isLibraryStorageKey(key: string | null): boolean {
+  return key === null || key === LIBRARY_KEY;
 }
 
 export function getSettings(): ReaderSettings {
@@ -370,6 +593,17 @@ export function saveScrollPosition(url: string, position: number) {
   }
 }
 
+function forgetScrollPosition(url: string) {
+  try {
+    const positions: Record<string, number> = JSON.parse(localStorage.getItem(SCROLL_KEY) || "{}");
+    if (!(url in positions)) return;
+    delete positions[url];
+    localStorage.setItem(SCROLL_KEY, JSON.stringify(positions));
+  } catch {
+    // ignore
+  }
+}
+
 export function extractChapterNumber(title: string): number | null {
   const match =
     title.match(/(?:ch(?:ương|apter|ap)?|chương)\s*(\d+)/i) ||
@@ -431,14 +665,80 @@ export function getGlossary(novelSlug: string): GlossaryTerm[] {
   }
 }
 
+// When a novel's glossary last changed here or on another device, and the
+// change last in step with the account (both 0 if never): it has changes to
+// send while `updatedAt` > `syncedAt`
+export interface GlossarySync {
+  updatedAt: number;
+  syncedAt: number;
+}
+
+function getGlossarySyncMap(): Record<string, GlossarySync> {
+  try {
+    const map = JSON.parse(localStorage.getItem(GLOSSARY_SYNC_KEY) || "{}");
+    return map && typeof map === "object" && !Array.isArray(map) ? map : {};
+  } catch {
+    return {};
+  }
+}
+
+export function getGlossarySync(novelSlug: string): GlossarySync {
+  const sync = getGlossarySyncMap()[novelSlug];
+  if (sync) return sync;
+  // Names collected before syncing existed: changes never sent
+  return localStorage.getItem(GLOSSARY_KEY_PREFIX + novelSlug) ? { updatedAt: 1, syncedAt: 0 } : { updatedAt: 0, syncedAt: 0 };
+}
+
+// The novels whose glossary has changes not sent to the account yet
+export function getUnsyncedGlossaries(): string[] {
+  return Object.entries(getGlossarySyncMap())
+    .filter(([, sync]) => sync.updatedAt > sync.syncedAt)
+    .map(([slug]) => slug);
+}
+
+function setGlossarySync(novelSlug: string, sync: GlossarySync) {
+  try {
+    localStorage.setItem(GLOSSARY_SYNC_KEY, JSON.stringify({ ...getGlossarySyncMap(), [novelSlug]: sync }));
+  } catch {
+    // storage full; the glossary is sent again next time
+  }
+}
+
+// The account has the glossary as it was at `updatedAt`: later changes here
+// (still to be sent) build on that version
+export function markGlossarySynced(novelSlug: string, updatedAt: number) {
+  const sync = getGlossarySync(novelSlug);
+  if (updatedAt <= sync.syncedAt) return;
+  setGlossarySync(novelSlug, { updatedAt: Math.max(sync.updatedAt, updatedAt), syncedAt: updatedAt });
+}
+
+function forgetGlossarySync(novelSlug: string) {
+  const { [novelSlug]: _sync, ...others } = getGlossarySyncMap();
+  try {
+    localStorage.setItem(GLOSSARY_SYNC_KEY, JSON.stringify(others));
+  } catch {
+    // ignore
+  }
+}
+
 // Saves a novel's glossary. When browser storage is full, room is made like
 // for a chapter: the glossaries of novels with no saved chapter go first, then
 // the oldest saved chapters (other novels' first). Returns how many chapters
 // were removed; throws StorageFullError if it still does not fit.
-export function saveGlossary(novelSlug: string, terms: GlossaryTerm[]): number {
+// `sync` is given for a glossary from the account; otherwise it is a change
+// made here, to be sent to the account.
+export function saveGlossary(novelSlug: string, terms: GlossaryTerm[], sync?: GlossarySync): number {
   const key = GLOSSARY_KEY_PREFIX + novelSlug;
+  const stamp = () => {
+    if (sync) return setGlossarySync(novelSlug, sync);
+    const previous = getGlossarySync(novelSlug);
+    setGlossarySync(novelSlug, { updatedAt: Math.max(Date.now(), previous.updatedAt + 1), syncedAt: previous.syncedAt });
+    notifyLocalChange();
+  };
   if (terms.length === 0) {
+    const had = localStorage.getItem(key) !== null;
     localStorage.removeItem(key);
+    if (had || sync) stamp();
     return 0;
   }
   const value = JSON.stringify(terms);
@@ -448,6 +748,7 @@ export function saveGlossary(novelSlug: string, terms: GlossaryTerm[]): number {
   while (true) {
     try {
       localStorage.setItem(key, value);
+      stamp();
       return evicted;
     } catch (e) {
       if (!isQuotaError(e)) throw e;

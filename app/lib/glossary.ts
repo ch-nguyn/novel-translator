@@ -162,6 +162,18 @@ export function importTerms(existing: GlossaryTerm[], imported: GlossaryTerm[]):
   return terms;
 }
 
+// Two copies of a glossary both changed since they were last the same (on two
+// devices): every name of `newer`, then the names only `older` has
+export function unionTerms(newer: GlossaryTerm[], older: GlossaryTerm[]): GlossaryTerm[] {
+  const keys = new Set(newer.map(termKey));
+  const terms = [...newer];
+  for (const term of older) {
+    if (terms.length >= MAX_STORED_TERMS) break;
+    if (!keys.has(termKey(term))) terms.push(term);
+  }
+  return terms;
+}
+
 // The user corrected a name in the text: every term written `from` is now
 // written `to`, and `from` is remembered so saved and future chapters get
 // fixed too. A name the glossary did not have is added (without its original

@@ -66,6 +66,7 @@ export default function AccountPanel({ textColor, t, lang, onAccessChange }: Pro
           </button>
         </div>
       ) : null}
+      {user && <p className="text-xs" style={{ color: textColor + "80" }}>{t.syncedNote}</p>}
       {user && <SubscriptionPanel key={user.id} textColor={textColor} t={t} lang={lang} onPaid={onAccessChange} />}
       {!isPending && !user && (
         <div className="flex flex-col gap-3">

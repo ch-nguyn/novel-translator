@@ -27,7 +27,13 @@ import {
   getNovelUpdates,
   NovelUpdate,
   MAX_CHAPTERS_PER_NOVEL,
+  getLibrary,
+  Library,
+  isLibraryStorageKey,
+  onLocalLibraryChange,
+  setReadingParagraph,
 } from "./lib/storage";
+import { LibrarySyncResult, pushGlossaries, pushLibrary, syncGlossary, syncLibrary } from "./lib/librarySync";
 import { checkNovelUpdates } from "./lib/toc";
 import { applyNames, editTerm, renameTerm, termKey } from "./lib/glossary";
 import { exportGlossary, importGlossary, scanSavedChapters, SCAN_CHAPTERS, updateGlossary } from "./lib/glossaryActions";
@@ -84,6 +90,12 @@ type LibraryTab = "chapters" | "names" | "novels";
 type ChapterView = "saved" | "toc";
 // A settings change is sent to the account this long after the last one
 const SETTINGS_PUSH_DELAY_MS = 1000;
+// …and a change to the shelf or names (e.g. reading on), this long
+const LIBRARY_PUSH_DELAY_MS = 3000;
+// How long opening a novel waits for its names from the account
+const GLOSSARY_FETCH_TIMEOUT_MS = 4000;
+// Novels offered to continue on the start page
+const CONTINUE_NOVELS = 3;
 // Novels whose sites are asked for new chapters, the most recently read first
 const MAX_CHECKED_NOVELS = 20;
 type SettingsTab = "ai" | "speech" | "general" | "account" | "contact";
@@ -130,7 +142,9 @@ type Notice =
   // A chapter could not be saved even after removing old ones
   | { kind: "storageFull" }
   // The monthly plan ran out since the app last checked
-  | { kind: "planExpired" };
+  | { kind: "planExpired" }
+  // The reader got further in this novel on another device
+  | { kind: "elsewhere"; url: string; chapterTitle: string; paragraph: number };
 
 export default function Home() {
   // The link in the form (also the open chapter's, until another is typed)
@@ -149,6 +163,13 @@ export default function Home() {
   const [prevUrl, setPrevUrl] = useState<string | null>(null);
   const [nextUrl, setNextUrl] = useState<string | null>(null);
   const [savedChapters, setSavedChapters] = useState<SavedChapter[]>([]);
+  // The novels on the shelf (see LibraryEntry)
+  const [library, setLibrary] = useState<Library>({});
+  // Where the reader is in a chapter is recorded from now on: for a signed-in
+  // user, once the account was asked where they got to on other devices
+  const positionReadyRef = useRef(false);
+  // The shelf change last offered as "read further on another device"
+  const elsewhereOfferedRef = useRef(0);
   const [overlay, setOverlay] = useState<Overlay>("none");
   const [libraryTab, setLibraryTab] = useState<LibraryTab>("chapters");
   const [chapterView, setChapterView] = useState<ChapterView>("saved");
@@ -189,6 +210,9 @@ export default function Home() {
   const checkingUpdatesRef = useRef(false);
   const { data: session, isPending: sessionPending } = authClient.useSession();
   const sessionId = session?.session.id ?? null;
+  const userId = session?.user.id ?? null;
+  const userIdRef = useRef(userId);
+  userIdRef.current = userId;
   // AI calls run on the app's key (see app/lib/systemAI.ts)
   const [systemAI, setSystemAI] = useState(false);
   const sessionIdRef = useRef(sessionId);
@@ -212,6 +236,8 @@ export default function Home() {
 
   // The chapter the library and names are about: the open one, not a link being typed
   const libraryUrl = openUrl || url;
+  const libraryUrlRef = useRef(libraryUrl);
+  libraryUrlRef.current = libraryUrl;
   const currentNovelSlug = libraryUrl ? extractNovelSlug(libraryUrl) : null;
 
   const currentNovelChapters = currentNovelSlug
@@ -228,6 +254,7 @@ export default function Home() {
 
   useEffect(() => {
     setSavedChapters(getSavedChapters());
+    setLibrary(getLibrary());
     setSettings(getSettings());
     setNovelUpdates(getNovelUpdates());
 
@@ -236,8 +263,7 @@ export default function Home() {
     if (currentUrl) {
       const chapter = getSavedChapters().find((c) => c.url === currentUrl);
       if (chapter) {
-        // Also records it as its novel's reading position (kept per novel since this was added)
-        markCurrent(chapter.url);
+        // Not recorded as reading it again: the account may know a later place
         setUrl(chapter.url);
         setOpenUrl(chapter.url);
         setTitle(chapter.title);
@@ -248,10 +274,7 @@ export default function Home() {
         setNextUrl(chapter.nextUrl || null);
         // Restore scroll position after content renders
         // Use setTimeout to wait for React to render the content
-        setTimeout(() => {
-          const saved = getScrollPosition(currentUrl);
-          if (saved) window.scrollTo(0, saved);
-        }, 100);
+        setTimeout(() => restorePosition(currentUrl), 100);
         refreshChapterLinks(chapter);
       } else {
         setUrl(currentUrl);
@@ -322,12 +345,14 @@ export default function Home() {
       clearTimeout(timer);
       timer = setTimeout(() => {
         saveScrollPosition(url, window.scrollY);
+        recordParagraph(url);
       }, 300);
     };
     // Save scroll immediately when user leaves/minimizes (reliable on mobile)
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden" && url) {
         saveScrollPosition(url, window.scrollY);
+        recordParagraph(url);
       }
     };
     window.addEventListener("scroll", handleScroll, { passive: true });
@@ -400,6 +425,58 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  // A signed-in user's shelf, places and names come from their account, again
+  // whenever the app is brought back; changes made here are sent shortly after
+  useEffect(() => {
+    if (sessionPending) return;
+    if (!userId) {
+      positionReadyRef.current = true;
+      return;
+    }
+    positionReadyRef.current = false;
+    const controller = new AbortController();
+    let pushTimer: ReturnType<typeof setTimeout> | undefined;
+    const push = (closing: boolean) => {
+      clearTimeout(pushTimer);
+      // Names only once the account has their novel. Called off if another
+      // account signs in (keepalive requests outlive the page: not those).
+      pushLibrary(userId, closing, closing ? undefined : controller.signal)
+        .catch(() => {})
+        .then(() => pushGlossaries(userId, controller.signal));
+    };
+    const sync = () => {
+      const shown = getCurrentUrl();
+      syncLibrary(userId, shown ? extractNovelSlug(shown) : null, controller.signal)
+        .then((result) => result && !controller.signal.aborted && applyLibrarySync(result))
+        .catch(() => {})
+        .finally(() => {
+          positionReadyRef.current = true;
+        });
+    };
+    const stopListening = onLocalLibraryChange(() => {
+      clearTimeout(pushTimer);
+      pushTimer = setTimeout(() => push(false), LIBRARY_PUSH_DELAY_MS);
+    });
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") sync();
+      else push(true);
+    };
+    sync();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      controller.abort();
+      clearTimeout(pushTimer);
+      stopListening();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, sessionPending]);
+
+  // The browser's bar (installed app, mobile) takes the page's background
+  useEffect(() => {
+    document.querySelector('meta[name="theme-color"]')?.setAttribute("content", settings.bgColor);
+  }, [settings.bgColor]);
+
   // The header slides away while reading down the chapter and returns on scrolling up
   useEffect(() => {
     let lastY = window.scrollY;
@@ -418,6 +495,13 @@ export default function Home() {
   // Another tab saved chapters or changed names: show them here too
   useEffect(() => {
     const handleStorage = (e: StorageEvent) => {
+      if (isLibraryStorageKey(e.key)) {
+        const shelf = getLibrary();
+        setLibrary(shelf);
+        // Deleted in another tab
+        const shown = libraryUrlRef.current;
+        if (shown && shelf[extractNovelSlug(shown)]?.removed) forgetNovel(extractNovelSlug(shown));
+      }
       if (!isGlossaryStorageKey(e.key)) return;
       refreshSaved();
       setGlossaryVersion((v) => v + 1);
@@ -457,10 +541,61 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [overlay, libraryTab]);
 
-  // The chapter the reader is on; opening it marks its novel's new chapters seen
-  function markCurrent(chapterUrl: string) {
-    setCurrentUrl(chapterUrl);
+  // The chapter the reader is on; opening it marks its novel's new chapters seen.
+  // `chapter` gives the names the shelf shows, when known.
+  function markCurrent(chapterUrl: string, chapter?: { novelName: string; title: string }) {
+    setCurrentUrl(chapterUrl, chapter && { novelName: chapter.novelName, chapterTitle: chapter.title });
     setNovelUpdates(getNovelUpdates());
+    setLibrary(getLibrary());
+  }
+
+  // Where the reader is in the chapter on screen: the paragraph at the top
+  function recordParagraph(chapterUrl: string) {
+    if (!positionReadyRef.current || loadingRef.current || openUrlRef.current !== chapterUrl) return;
+    setReadingParagraph(chapterUrl, firstVisibleParagraph());
+  }
+
+  // Back to where the reader was in a chapter just shown: the scroll offset
+  // kept on this device, else the paragraph reached on another
+  function restorePosition(chapterUrl: string) {
+    const offset = getScrollPosition(chapterUrl);
+    if (offset) return window.scrollTo(0, offset);
+    const entry = getLibrary()[extractNovelSlug(chapterUrl)];
+    if (entry && !entry.removed && entry.url === chapterUrl && entry.paragraph > 0) scrollToParagraph(entry.paragraph);
+    else window.scrollTo(0, 0);
+  }
+
+  function scrollToParagraph(paragraph: number) {
+    const line = textRef.current?.querySelector<HTMLElement>(`[data-p="${paragraph}"]`);
+    if (line) window.scrollTo(0, window.scrollY + line.getBoundingClientRect().top - 72);
+  }
+
+  // Shows what the account brought from other devices
+  function applyLibrarySync({ changed, removed, glossaries }: LibrarySyncResult) {
+    for (const slug of removed) forgetNovel(slug);
+    for (const slug of glossaries) showGlossaryNames(slug);
+    if (glossaries.length > 0) setGlossaryVersion((v) => v + 1);
+    refreshSaved();
+    // Read further in the open novel elsewhere (now, or since the chapter on
+    // screen was opened here): offered, not jumped to
+    const shown = openUrlRef.current;
+    const slug = shown ? extractNovelSlug(shown) : null;
+    if (!slug || loadingRef.current) return;
+    const entry = getLibrary()[slug];
+    if (!entry || entry.removed) return;
+    if (entry.url === shown && (!changed.includes(slug) || Math.abs(entry.paragraph - firstVisibleParagraph()) <= 2)) return;
+    // Once per change: not again after the reader dismissed it
+    if (elsewhereOfferedRef.current === entry.updatedAt) return;
+    elsewhereOfferedRef.current = entry.updatedAt;
+    setNotice({ kind: "elsewhere", url: entry.url, chapterTitle: entry.chapterTitle, paragraph: entry.paragraph });
+  }
+
+  // Goes to where the reader got to on another device
+  function openElsewhere(target: string, paragraph: number) {
+    setNotice(null);
+    if (target === openUrlRef.current) return scrollToParagraph(paragraph);
+    if (!canNavigate(target)) return setNotice({ kind: "error", message: t.needApiKey });
+    openChapterLink(target);
   }
 
   function toggleOverlay(next: Overlay) {
@@ -471,11 +606,10 @@ export default function Home() {
   // checked recently are skipped unless `force`)
   async function checkForNewChapters(force: boolean) {
     if (checkingUpdatesRef.current) return;
-    // A chapter of each novel, most recently saved novels first
+    // A chapter of each novel on the shelf, most recently read first
     const novels = new Map<string, string>();
-    for (const chapter of getSavedChapters()) {
-      if (!novels.has(chapter.novelSlug)) novels.set(chapter.novelSlug, getLastReadUrl(chapter.novelSlug) ?? chapter.url);
-    }
+    const shelf = Object.entries(getLibrary()).filter(([, entry]) => !entry.removed);
+    for (const [slug, entry] of shelf.sort(([, a], [, b]) => b.updatedAt - a.updatedAt)) novels.set(slug, entry.url);
     if (novels.size === 0) return;
     checkingUpdatesRef.current = true;
     setCheckingUpdates(true);
@@ -535,6 +669,7 @@ export default function Home() {
 
   function refreshSaved() {
     setSavedChapters(getSavedChapters());
+    setLibrary(getLibrary());
   }
 
   function applySyncResult({ saved, evicted }: SyncResult) {
@@ -645,7 +780,9 @@ export default function Home() {
       setTitle(savedTitle);
       setPrevUrl(chapter.prevUrl);
       setNextUrl(chapter.nextUrl);
-      markCurrent(fetchUrl);
+      markCurrent(fetchUrl, { novelName: chapter.novelName, title: savedTitle });
+      // Opened where another device left off (the reader has not scrolled yet)
+      if (window.scrollY < 40) requestAnimationFrame(() => restorePosition(fetchUrl));
       return { nextUrl: chapter.nextUrl };
     } catch (e: unknown) {
       // Off screen, a failure is silent: the chapter is translated again when opened
@@ -776,12 +913,9 @@ export default function Home() {
     setPrevUrl(chapter.prevUrl || null);
     setNextUrl(chapter.nextUrl || null);
     setOverlay("none");
-    markCurrent(chapter.url);
+    markCurrent(chapter.url, chapter);
     // Restore scroll position after content renders
-    requestAnimationFrame(() => {
-      const saved = getScrollPosition(chapter.url);
-      window.scrollTo(0, saved);
-    });
+    requestAnimationFrame(() => restorePosition(chapter.url));
     await refreshChapterLinks(chapter);
   }
 
@@ -844,7 +978,7 @@ export default function Home() {
   // is saved already, else its first chapter
   async function openFoundNovel(novel: FoundNovel) {
     const slug = extractNovelSlug(novel.url);
-    const saved = savedChapters.some((c) => c.novelSlug === slug);
+    const saved = savedChapters.some((c) => c.novelSlug === slug) || (!!library[slug] && !library[slug].removed);
     closeOverlay();
     if (!saved && !hasApiKey) return setNotice({ kind: "error", message: t.needApiKey });
     // The reader moves on to this novel: auto mode stops; the chapter being
@@ -879,28 +1013,50 @@ export default function Home() {
     runChapter(chapterUrl, produceChapter(chapterUrl, getTranslateOptions(settings)));
   }
 
-  // Opens a novel where the reader left off: the chapter last opened in it,
-  // else (never opened on this device since) the most recently saved one
-  function handleSelectNovel(slug: string) {
-    const novelChapters = savedChapters.filter((c) => c.novelSlug === slug);
+  // Opens a novel where the reader left off (here or on another device): the
+  // chapter last opened in it, translated again if this device does not have
+  // it; else the most recently saved one
+  async function handleSelectNovel(slug: string) {
+    const novelChapters = getSavedChapters().filter((c) => c.novelSlug === slug);
     const lastRead = getLastReadUrl(slug);
-    const chapter =
-      novelChapters.find((c) => c.url === lastRead) ?? novelChapters.reduce((a, b) => (a.savedAt > b.savedAt ? a : b));
-    openSavedChapter(chapter);
+    const saved = novelChapters.find((c) => c.url === lastRead);
+    if (saved) return openSavedChapter(saved);
+    if (lastRead && canNavigate(lastRead)) {
+      closeOverlay();
+      stopAutoMode();
+      // Translated with the names the novel has on the account
+      if (userIdRef.current) {
+        setFetching(true);
+        await syncGlossary(userIdRef.current, slug, undefined, AbortSignal.timeout(GLOSSARY_FETCH_TIMEOUT_MS)).catch(() => {});
+        setFetching(false);
+      }
+      return navigateToChapter(lastRead);
+    }
+    if (novelChapters.length > 0) return openSavedChapter(novelChapters.reduce((a, b) => (a.savedAt > b.savedAt ? a : b)));
+    closeOverlay();
+    setNotice({ kind: "error", message: t.needApiKey });
   }
 
   async function handleClearNovel(novelSlug: string) {
-    const name = savedChapters.find((c) => c.novelSlug === novelSlug && c.novelName)?.novelName || novelSlug;
-    if (!window.confirm(t.confirmClearNovel.replace("{name}", name))) return;
+    const name = library[novelSlug]?.name || savedChapters.find((c) => c.novelSlug === novelSlug && c.novelName)?.novelName || novelSlug;
+    const question = t.confirmClearNovel.replace("{name}", name) + (sessionId ? " " + t.clearEverywhere : "");
+    if (!window.confirm(question)) return;
 
     await withStorageLock(() => clearNovelChapters(novelSlug));
+    forgetNovel(novelSlug);
+  }
+
+  // A novel was deleted (here or on another device): nothing of it goes on
+  function forgetNovel(novelSlug: string) {
     discardNovelJobs(novelSlug);
+    // Also called from the account sync, set up on an earlier render
+    const shown = libraryUrlRef.current;
     // It would write the deleted novel's names back
-    if (currentNovelSlug === novelSlug) scanAbortRef.current?.abort();
+    if (shown && extractNovelSlug(shown) === novelSlug) scanAbortRef.current?.abort();
     refreshSaved();
     // Chapters of it translating off screen would be saved back
     for (const [runUrl, run] of runsRef.current) if (extractNovelSlug(runUrl) === novelSlug) run.abort();
-    if (url && extractNovelSlug(url) === novelSlug) {
+    if (shown && extractNovelSlug(shown) === novelSlug) {
       // Stop translating it (and auto mode), so it is not saved back
       stopAutoMode();
       abortRef.current?.abort();
@@ -1062,8 +1218,13 @@ export default function Home() {
     return counts;
   }, [savedChapters]);
 
-  // A saved novel's site has chapters the reader has not seen yet
-  const hasNewChapters = Object.entries(novelUpdates).some(([slug, update]) => update.total > update.seen && libraryCounts.has(slug));
+  // A novel on the shelf has chapters on its site the reader has not seen yet
+  const hasNewChapters = Object.entries(novelUpdates).some(([slug, update]) => update.total > update.seen && library[slug] && !library[slug].removed);
+  // Where the reader left off in the novels read most recently
+  const continueNovels = Object.entries(library)
+    .filter(([, entry]) => !entry.removed && entry.name)
+    .sort(([, a], [, b]) => b.updatedAt - a.updatedAt)
+    .slice(0, CONTINUE_NOVELS);
 
   // Finding a novel by name, or opening it from a link
   const startPanel = (autoFocus: boolean) => (
@@ -1125,8 +1286,18 @@ export default function Home() {
             ? t.storageFull
             : notice.kind === "planExpired"
               ? t.planExpiredNotice
-              : t.storageEvicted.replace("{n}", String(notice.count))}
+              : notice.kind === "elsewhere"
+                ? t.readElsewhere.replace("{chapter}", notice.chapterTitle || t.anotherChapter)
+                : t.storageEvicted.replace("{n}", String(notice.count))}
       </span>
+      {notice.kind === "elsewhere" && (
+        <button
+          onClick={() => openElsewhere(notice.url, notice.paragraph)}
+          className="shrink-0 font-medium text-blue-600 hover:underline cursor-pointer"
+        >
+          {t.goThere}
+        </button>
+      )}
       {notice.kind === "planExpired" && (
         <button
           onClick={() => {
@@ -1223,6 +1394,26 @@ export default function Home() {
           <section className="max-w-xl mx-auto py-6 sm:py-12">
             <h1 className="text-xl sm:text-2xl font-semibold text-center mb-6">{t.emptyTitle}</h1>
             {noticeBanner}
+            {continueNovels.length > 0 && (
+              <div className="mb-6">
+                <p className="text-sm font-medium mb-2">{t.continueReading}</p>
+                <ul className="flex flex-col rounded-lg border divide-y" style={{ borderColor: textColor + "20" }}>
+                  {continueNovels.map(([slug, entry]) => (
+                    <li key={slug} style={{ borderColor: textColor + "15" }}>
+                      <button
+                        onClick={() => handleSelectNovel(slug)}
+                        className="w-full text-left px-3 py-2.5 cursor-pointer hover:opacity-70 transition-opacity"
+                      >
+                        <span className="block text-sm font-medium truncate">{entry.name}</span>
+                        {entry.chapterTitle && (
+                          <span className="block text-xs truncate" style={{ color: textColor + "80" }}>{entry.chapterTitle}</span>
+                        )}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {startPanel(false)}
           </section>
         ) : (
@@ -1449,6 +1640,7 @@ export default function Home() {
               />
             ) : (
               <SavedNovelsList
+                library={library}
                 chapters={savedChapters}
                 updates={novelUpdates}
                 checking={checkingUpdates}
