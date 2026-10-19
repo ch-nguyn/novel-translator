@@ -69,9 +69,6 @@ export default function SavedChaptersList({
                   <p className="text-sm font-medium truncate" style={{ color: isActive ? "#3b82f6" : undefined }}>
                     {ch.title}
                   </p>
-                  <p className="text-xs" style={{ color: textColor + "60" }}>
-                    {new Date(ch.savedAt).toLocaleString()}
-                  </p>
                 </button>
               </li>
             );

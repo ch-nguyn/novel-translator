@@ -225,7 +225,6 @@ export default function Home() {
     [currentNovelSlug, savedChapters, glossaryVersion]
   );
   // Names first found in the open chapter
-  const chapterNewTerms = url ? glossary.filter((term) => term.firstSeen === url) : [];
 
   useEffect(() => {
     setSavedChapters(getSavedChapters());
@@ -1235,18 +1234,6 @@ export default function Home() {
                   <p className="text-sm mt-1" style={{ color: textColor + "80" }}>{chapterName}</p>
                 )}
                 {!novelName && !chapterName && title && <h1 className="text-lg font-semibold">{title}</h1>}
-                {settings.autoGlossary && !isLoading && chapterNewTerms.length > 0 && (
-                  <button
-                    onClick={() => openLibrary("names")}
-                    className="mt-2 max-w-full truncate text-xs cursor-pointer hover:underline"
-                    style={{ color: textColor + "80" }}
-                  >
-                    ✓{" "}
-                    {t.newNames
-                      .replace("{n}", String(chapterNewTerms.length))
-                      .replace("{list}", chapterNewTerms.slice(0, 4).map((term) => term.target).join(", ") + (chapterNewTerms.length > 4 ? "…" : ""))}
-                  </button>
-                )}
               </div>
             )}
 
