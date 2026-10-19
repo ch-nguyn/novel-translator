@@ -42,8 +42,6 @@ interface ExtractParams {
   translation: string;
   // The novel's glossary so far
   known: GlossaryTerm[];
-  // Recorded as where the new names were first seen
-  chapterUrl?: string;
 }
 
 // The JSON object in a model answer that may wrap it in a code fence or prose
@@ -62,7 +60,7 @@ const HAS_CJK = /[㐀-鿿豈-﫿]/;
 
 // Never throws: a chapter is complete without its names, so any failure just
 // yields none
-export async function extractTerms({ apiKey, model, source, translation, known, chapterUrl }: ExtractParams): Promise<GlossaryTerm[]> {
+export async function extractTerms({ apiKey, model, source, translation, known }: ExtractParams): Promise<GlossaryTerm[]> {
   const sourceText = source.slice(0, MAX_SOURCE_CHARS);
   const translatedText = translation.slice(0, MAX_TRANSLATION_CHARS);
   const knownTargets = new Map(known.filter((t) => t.source).map((t) => [t.source, t.target]));
@@ -106,7 +104,7 @@ export async function extractTerms({ apiKey, model, source, translation, known, 
     }
     seen.add(term.source);
     const { aliases: _aliases, edited: _edited, ...clean } = term;
-    found.push(chapterUrl ? { ...clean, firstSeen: chapterUrl } : clean);
+    found.push(clean);
     if (found.length >= MAX_NEW_TERMS) break;
   }
   return found;

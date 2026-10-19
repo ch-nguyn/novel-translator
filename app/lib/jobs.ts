@@ -258,15 +258,17 @@ export function saveTranslatedChapter(
 ): { text: string; title: string; evicted: number } {
   const novelSlug = extractNovelSlug(url);
   let text = chapter.text;
+  // Chapters removed to make room
+  let evictedForNames = 0;
   // Unless the user turned the glossary off
   if (getSettings().autoGlossary) {
     const known = getGlossary(novelSlug);
     const glossary = mergeTerms(known, chapter.newTerms ?? []);
     if (glossary !== known) {
       try {
-        saveGlossary(novelSlug, glossary);
+        evictedForNames = saveGlossary(novelSlug, glossary);
       } catch {
-        // Storage is full: the chapter itself matters more; its names are lost
+        // Storage is full even without old chapters: the chapter itself matters more; its names are lost
       }
     }
     text = applyNames(chapter.text, glossary);
@@ -283,7 +285,7 @@ export function saveTranslatedChapter(
     nextUrl: chapter.nextUrl,
     savedAt: Date.now(),
   });
-  return { text, title, evicted };
+  return { text, title, evicted: evicted + evictedForNames };
 }
 
 export interface SyncResult {

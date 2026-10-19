@@ -11,7 +11,7 @@ const MAX_TEXT_LENGTH = 200_000;
 // background jobs call extractTerms themselves.
 export async function POST(req: Request) {
   try {
-    const { apiKey, model, source, translation, known, url } = await req.json();
+    const { apiKey, model, source, translation, known } = await req.json();
     const access = await resolveAiAccess(req, apiKey, model);
     if (!access) {
       return Response.json({ error: "API key is required. Set it in Settings." }, { status: 400 });
@@ -35,7 +35,6 @@ export async function POST(req: Request) {
       source,
       translation,
       known: knownTerms,
-      chapterUrl: typeof url === "string" && url.length <= 2048 ? url : undefined,
     });
     return Response.json({ terms });
   } catch {

@@ -22,7 +22,7 @@ const NOVEL_UPDATES_KEY = "novel-translator-novel-updates";
 const GLOSSARY_KEY_PREFIX = "novel-translator-glossary:";
 const PENDING_WINDOW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_SCROLL_POSITIONS = 300;
-export const MAX_CHAPTERS_PER_NOVEL = 100;
+export const MAX_CHAPTERS_PER_NOVEL = 50;
 const REMOVED_MODEL_NAMES = new Set([
   "gpt-4.1",
   "gpt-4.1-mini",
@@ -112,17 +112,30 @@ function isQuotaError(e: unknown): boolean {
   return e instanceof DOMException && (e.name === "QuotaExceededError" || e.name === "NS_ERROR_DOM_QUOTA_REACHED");
 }
 
-// Least recently saved chapter to drop when storage is full: other novels
-// first, then older chapters of the same novel. Never the one being saved.
-function pickEvictionVictim(chapters: SavedChapter[], keep: SavedChapter): SavedChapter | null {
-  const candidates = chapters.filter((c) => c.url !== keep.url);
+// Least recently saved chapter to drop when storage is full: novels other
+// than `keepSlug` first, then older chapters of it. Never `keepUrl`.
+function pickEvictionVictim(chapters: SavedChapter[], keepSlug: string, keepUrl?: string): SavedChapter | null {
+  const candidates = chapters.filter((c) => c.url !== keepUrl);
   if (candidates.length === 0) return null;
   return candidates.reduce((victim, c) => {
-    const victimOther = victim.novelSlug !== keep.novelSlug;
-    const cOther = c.novelSlug !== keep.novelSlug;
+    const victimOther = victim.novelSlug !== keepSlug;
+    const cOther = c.novelSlug !== keepSlug;
     if (cOther !== victimOther) return cOther ? c : victim;
     return c.savedAt < victim.savedAt ? c : victim;
   });
+}
+
+// Makes room when storage is full by removing the glossaries of novels with no
+// saved chapter in `chapters` (except `keepSlug`'s). Returns whether any was.
+function removeOrphanGlossaries(chapters: SavedChapter[], keepSlug: string): boolean {
+  const slugs = new Set(chapters.map((c) => c.novelSlug)).add(keepSlug);
+  const orphans: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key?.startsWith(GLOSSARY_KEY_PREFIX) && !slugs.has(key.slice(GLOSSARY_KEY_PREFIX.length))) orphans.push(key);
+  }
+  for (const key of orphans) localStorage.removeItem(key);
+  return orphans.length > 0;
 }
 
 // Saves a chapter. When browser storage is full, the oldest chapters are
@@ -146,13 +159,18 @@ export function saveChapter(chapter: SavedChapter): number {
   }
 
   let evicted = 0;
+  let orphansRemoved = false;
   while (true) {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
       return evicted;
     } catch (e) {
       if (!isQuotaError(e)) throw e;
-      const victim = pickEvictionVictim(chapters, chapter);
+      if (!orphansRemoved) {
+        orphansRemoved = true;
+        if (removeOrphanGlossaries(chapters, chapter.novelSlug)) continue;
+      }
+      const victim = pickEvictionVictim(chapters, chapter.novelSlug, chapter.url);
       if (!victim) throw new StorageFullError();
       chapters = chapters.filter((c) => c !== victim);
       evicted++;
@@ -413,13 +431,36 @@ export function getGlossary(novelSlug: string): GlossaryTerm[] {
   }
 }
 
-// Throws StorageFullError when browser storage is full
-export function saveGlossary(novelSlug: string, terms: GlossaryTerm[]) {
-  try {
-    if (terms.length === 0) localStorage.removeItem(GLOSSARY_KEY_PREFIX + novelSlug);
-    else localStorage.setItem(GLOSSARY_KEY_PREFIX + novelSlug, JSON.stringify(terms));
-  } catch (e) {
-    throw isQuotaError(e) ? new StorageFullError() : e;
+// Saves a novel's glossary. When browser storage is full, room is made like
+// for a chapter: the glossaries of novels with no saved chapter go first, then
+// the oldest saved chapters (other novels' first). Returns how many chapters
+// were removed; throws StorageFullError if it still does not fit.
+export function saveGlossary(novelSlug: string, terms: GlossaryTerm[]): number {
+  const key = GLOSSARY_KEY_PREFIX + novelSlug;
+  if (terms.length === 0) {
+    localStorage.removeItem(key);
+    return 0;
+  }
+  const value = JSON.stringify(terms);
+  let chapters = getSavedChapters();
+  let evicted = 0;
+  let orphansRemoved = false;
+  while (true) {
+    try {
+      localStorage.setItem(key, value);
+      return evicted;
+    } catch (e) {
+      if (!isQuotaError(e)) throw e;
+      if (!orphansRemoved) {
+        orphansRemoved = true;
+        if (removeOrphanGlossaries(chapters, novelSlug)) continue;
+      }
+      const victim = pickEvictionVictim(chapters, novelSlug);
+      if (!victim) throw new StorageFullError();
+      chapters = chapters.filter((c) => c !== victim);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(chapters));
+      evicted++;
+    }
   }
 }
 

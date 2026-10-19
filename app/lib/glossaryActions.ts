@@ -68,7 +68,7 @@ const FILE_FORMAT = "novel-translator-glossary";
 
 // Downloads the glossary as a JSON file others can import
 export function exportGlossary(novelSlug: string, novelName: string) {
-  const terms = getGlossary(novelSlug).map(({ firstSeen: _firstSeen, edited: _edited, ...term }) => term);
+  const terms = getGlossary(novelSlug).map(({ edited: _edited, ...term }) => term);
   const file = JSON.stringify({ format: FILE_FORMAT, version: 1, novel: novelName, terms }, null, 2);
   downloadBlob(new Blob([file], { type: "application/json" }), `${safeFilename(novelName || novelSlug)} - names.json`);
 }

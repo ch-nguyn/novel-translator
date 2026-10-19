@@ -138,8 +138,6 @@ export interface GlossaryTerm {
   gender?: "male" | "female";
   // Other ways translations wrote it; replaced by `target` when a chapter is saved
   aliases?: string[];
-  // The chapter it was found in
-  firstSeen?: string;
   // Set or corrected by the user, so never changed by a translation
   edited?: boolean;
 }

@@ -6,9 +6,10 @@ import { GlossaryTerm, TERM_KINDS, TermKind } from "./types";
 // browser, so it must not import server-only code.
 
 // Per novel: names found automatically stop being added at MAX_TERMS, leaving
-// room for the user's own up to MAX_STORED_TERMS
-export const MAX_TERMS = 2000;
-export const MAX_STORED_TERMS = 2500;
+// room for the user's own up to MAX_STORED_TERMS (about 70 characters each in
+// browser storage; only the names a chapter contains go to the model)
+export const MAX_TERMS = 8000;
+export const MAX_STORED_TERMS = 10000;
 const MAX_SOURCE_LENGTH = 30;
 const MAX_TARGET_LENGTH = 60;
 const MAX_ALIASES = 10;
@@ -43,7 +44,6 @@ export function sanitizeTerms(value: unknown, max = MAX_STORED_TERMS): GlossaryT
         .filter((a): a is string => !!a && a !== target);
       if (aliases.length > 0) term.aliases = [...new Set(aliases)].slice(0, MAX_ALIASES);
     }
-    if (typeof raw.firstSeen === "string" && raw.firstSeen.length <= 2048) term.firstSeen = raw.firstSeen;
     if (raw.edited === true) term.edited = true;
     terms.push(term);
   }

@@ -358,7 +358,6 @@ async function translateChapter(
             source: content.text,
             translation: text,
             known: step.glossary,
-            chapterUrl: url,
           }),
     ]);
     if (titles) {
