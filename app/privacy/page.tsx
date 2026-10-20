@@ -1,13 +1,13 @@
 import type { Metadata } from "next";
 import LegalPage from "../components/LegalPage";
 
-export const metadata: Metadata = { title: "Chính sách quyền riêng tư · Novel Translator" };
+export const metadata: Metadata = { title: "Chính sách quyền riêng tư" };
 
 export default function PrivacyPage() {
   return (
     <LegalPage title="Chính sách quyền riêng tư" updated="19/10/2026">
       <p className="mt-6">
-        Novel Translator giúp bạn đọc truyện tiếng Trung bằng tiếng Việt. Trang này nói rõ ứng dụng lưu những gì và dùng vào việc gì.
+        Dịch Truyện Trung giúp bạn đọc truyện tiếng Trung bằng tiếng Việt. Trang này nói rõ ứng dụng lưu những gì và dùng vào việc gì.
       </p>
 
       <h2>Khi đăng nhập bằng Google</h2>

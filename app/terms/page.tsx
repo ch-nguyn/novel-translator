@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import LegalPage from "../components/LegalPage";
 
-export const metadata: Metadata = { title: "Điều khoản sử dụng · Novel Translator" };
+export const metadata: Metadata = { title: "Điều khoản sử dụng" };
 
 export default function TermsPage() {
   return (
     <LegalPage title="Điều khoản sử dụng" updated="19/10/2026">
-      <p className="mt-6">Khi dùng Novel Translator, bạn đồng ý với các điều khoản dưới đây.</p>
+      <p className="mt-6">Khi dùng Dịch Truyện Trung, bạn đồng ý với các điều khoản dưới đây.</p>
 
       <h2>Ứng dụng làm gì</h2>
       <p>

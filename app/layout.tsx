@@ -1,9 +1,17 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+import { APP_DESCRIPTION, APP_NAME, APP_TAGLINE, siteOrigin } from "./lib/siteUrl";
 
+const title = `${APP_NAME} – ${APP_TAGLINE}`;
+
+// What search engines and shared links show (the picture: app/opengraph-image.tsx)
 export const metadata: Metadata = {
-  title: "Novel Translator",
-  description: "Translate and simplify novels for easy reading",
+  ...(siteOrigin && { metadataBase: new URL(siteOrigin) }),
+  title: { default: title, template: `%s · ${APP_NAME}` },
+  description: APP_DESCRIPTION,
+  applicationName: APP_NAME,
+  openGraph: { type: "website", locale: "vi_VN", siteName: APP_NAME, title, description: APP_DESCRIPTION, url: "/" },
+  twitter: { card: "summary_large_image", title, description: APP_DESCRIPTION },
   appleWebApp: { capable: true, title: "Dịch truyện", statusBarStyle: "default" },
 };
 
