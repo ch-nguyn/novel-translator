@@ -1,4 +1,4 @@
-import { readErrorMessage } from "./api";
+import { readError } from "./errors";
 import { extractNovelSlug, getNovelUpdates, recordNovelToc } from "./storage";
 
 // A novel's table of contents: every chapter its site lists, in reading
@@ -36,7 +36,7 @@ export async function fetchNovelToc(url: string, { signal, fresh = false }: { si
   // A different address skips the server's cached answer
   if (fresh) params.set("at", String(Date.now()));
   const res = await fetch(`/api/toc?${params}`, { signal });
-  if (!res.ok) throw new Error(await readErrorMessage(res, "Could not load the table of contents"));
+  if (!res.ok) throw await readError(res, "Could not load the table of contents");
   const toc: NovelToc = await res.json();
   cache.set(slug, { toc, at: Date.now() });
   return toc;

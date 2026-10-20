@@ -1,4 +1,5 @@
 import { remembersNames } from "./systemAI";
+import type { ErrorCode } from "./errors";
 
 export interface SavedChapter {
   url: string;
@@ -163,6 +164,8 @@ export interface ChapterJob extends TranslatedChapter {
   status: ChapterJobStatus;
   lang: string;
   error?: string;
+  // What the reader is told about `error` (see app/lib/errors.ts)
+  errorCode?: ErrorCode;
   updatedAt: number;
 }
 

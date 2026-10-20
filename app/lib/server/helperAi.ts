@@ -1,6 +1,6 @@
 import { DEFAULT_AI_MODEL } from "../types";
 import { SYSTEM_AI_MODEL, systemApiKey } from "./aiAccess";
-import { allow, clientIp } from "./rateLimit";
+import { allowPaid, clientIp } from "./rateLimit";
 
 // The AI for the small helpers every reader gets, signed in or not, with a
 // key or without: finding a novel by its Vietnamese name, naming the search
@@ -19,16 +19,21 @@ export interface HelperAi {
   model: string;
   // On the app's key
   system: boolean;
-  // Counts one question to the AI; false once the address asked too many today
+  // Counts one question to the AI; false once the address asked too many
+  // today, or when they cannot be counted (Redis failing)
   allowCall: () => Promise<boolean>;
 }
 
 // null when there is neither the app's key nor the reader's `apiKey`
 export function helperAi(req: Request, apiKey: unknown, model?: unknown): HelperAi | null {
+  return helperAiFor(clientIp(req), apiKey, model);
+}
+
+// The same for the address `ip` (a background job's, which asked for it)
+export function helperAiFor(ip: string, apiKey: unknown, model?: unknown): HelperAi | null {
   const system = systemApiKey();
   if (system) {
-    const ip = clientIp(req);
-    return { apiKey: system, model: SYSTEM_AI_MODEL, system: true, allowCall: () => allow("helper-ai", ip, CALLS_PER_DAY, 24 * 3600) };
+    return { apiKey: system, model: SYSTEM_AI_MODEL, system: true, allowCall: () => allowPaid("helper-ai", ip, CALLS_PER_DAY, 24 * 3600) };
   }
   const key = typeof apiKey === "string" ? apiKey.trim() : "";
   if (!key) return null;

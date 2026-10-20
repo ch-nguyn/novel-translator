@@ -1,10 +1,12 @@
 import { getRedis } from "./jobs";
+import { errorResponse } from "./apiError";
 
 // Limits on what anyone, signed in or not, can make the server do: fetch
 // pages from the novel sites (and, when a site hides behind Cloudflare, run a
 // headless browser for it). Counted per IP address, generously, since many
 // readers on a mobile network can share one. Nothing is limited when Redis is
-// not set up or cannot be reached.
+// not set up (a local setup). When it is but fails, what costs the app (its
+// AI, headless browsers) stops; the rest goes on unlimited.
 
 const RELEASE_IF_OWNED = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0`;
 // One more in the count at KEYS[1], which lasts ARGV[1] seconds from its first
@@ -33,17 +35,28 @@ export function clientIp(req: Request): string {
   return forwarded || req.headers.get("x-real-ip")?.trim() || "unknown";
 }
 
-// Counts one more use of `bucket` by `who`; false once more than `limit`
-// were counted in the current `windowSeconds`
-export async function allow(bucket: string, who: string, limit: number, windowSeconds: number): Promise<boolean> {
-  const db = getRedis();
-  if (!db) return true;
+// Counts one more use of `bucket` by `who`: "over" once more than `limit`
+// were counted in the current `windowSeconds`, "down" when Redis failed
+async function check(bucket: string, who: string, limit: number, windowSeconds: number): Promise<"allowed" | "over" | "down"> {
+  if (!getRedis()) return "allowed";
   const key = `rl:${bucket}:${who}:${Math.floor(Date.now() / 1000 / windowSeconds)}`;
   try {
-    return (await count(key, windowSeconds)) <= limit;
+    return (await count(key, windowSeconds)) <= limit ? "allowed" : "over";
   } catch {
-    return true;
+    return "down";
   }
+}
+
+// Counts one more use of `bucket` by `who`; false once more than `limit`
+// were counted in the current `windowSeconds`. Redis failing lets it through.
+export async function allow(bucket: string, who: string, limit: number, windowSeconds: number): Promise<boolean> {
+  return (await check(bucket, who, limit, windowSeconds)) !== "over";
+}
+
+// The same for what the app pays for (its AI): Redis failing stops it, as
+// nothing would limit it then
+export async function allowPaid(bucket: string, who: string, limit: number, windowSeconds: number): Promise<boolean> {
+  return (await check(bucket, who, limit, windowSeconds)) === "allowed";
 }
 
 // One more in the count at `key`, which is dropped `seconds` after its first.
@@ -63,6 +76,9 @@ const PER_MINUTE = {
   search: 20,
   // Background translations started (each fetches chapters)
   jobs: 30,
+  // Chapters saved from background translations, told to the server (a
+  // device sends a long list in requests of MAX_ACKNOWLEDGED)
+  acknowledge: 60,
   // Novel and chapter names translated by the AI
   titles: 30,
 };
@@ -70,10 +86,7 @@ const PER_MINUTE = {
 // A 429 answer when the request's address went over its limit for `bucket`
 export async function limitRequest(req: Request, bucket: keyof typeof PER_MINUTE): Promise<Response | null> {
   if (await allow(bucket, clientIp(req), PER_MINUTE[bucket], 60)) return null;
-  return Response.json(
-    { error: "Too many requests from your network. Please wait a minute and try again." },
-    { status: 429, headers: { "Retry-After": "60" } }
-  );
+  return errorResponse("rateLimited", "Too many requests from your network. Please wait a minute and try again.", 429, { "Retry-After": "60" });
 }
 
 // Headless browsers running at once across all of the app's servers: each
@@ -104,11 +117,16 @@ export async function withBrowserSlot<T>(ip: string | undefined, work: () => Pro
     release = taken;
   } catch (e) {
     if (e instanceof BrowserBusyError) throw e;
-    // Redis failed: run without a slot rather than fail the reader
-    return work();
+    // Redis failed: nothing would limit the browsers then
+    console.error(`[browser] no slot, Redis failed: ${e instanceof Error ? e.message : e}`);
+    throw new BrowserBusyError();
   }
   try {
-    if (ip && !(await allow("browser", ip, BROWSER_RUNS_PER_IP, BROWSER_RUNS_WINDOW_SECONDS))) throw new BrowserLimitError();
+    if (ip) {
+      const runs = await check("browser", ip, BROWSER_RUNS_PER_IP, BROWSER_RUNS_WINDOW_SECONDS);
+      if (runs === "over") throw new BrowserLimitError();
+      if (runs === "down") throw new BrowserBusyError();
+    }
     return await work();
   } finally {
     await release();

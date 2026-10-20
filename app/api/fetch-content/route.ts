@@ -1,4 +1,5 @@
-import { fetchContent, FetchContentError } from "../../lib/server/fetchContent";
+import { fetchContent } from "../../lib/server/fetchContent";
+import { responseFor } from "../../lib/server/apiError";
 import { clientIp, limitRequest } from "../../lib/server/rateLimit";
 
 export async function POST(req: Request) {
@@ -13,8 +14,6 @@ export async function POST(req: Request) {
     if (limited) return limited;
     return Response.json(await fetchContent(url, providedHtml, clientIp(req)));
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Internal server error";
-    const status = e instanceof FetchContentError ? e.status : 500;
-    return Response.json({ error: message }, { status });
+    return responseFor(e);
   }
 }

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Translations } from "../lib/i18n";
 import { authClient, signInWithGoogle } from "../lib/auth";
 import { PLAN_PRICE_VND } from "../lib/plan";
+import { forgetAccountSettings } from "../lib/storage";
 import SubscriptionPanel, { formatPrice } from "./SubscriptionPanel";
 
 interface Props {
@@ -12,10 +13,12 @@ interface Props {
   lang: string;
   // The user's access to the app's AI may have changed (plan paid)
   onAccessChange: () => void;
+  // Signed out: the account's API keys have left the device
+  onSignedOut: () => void;
 }
 
 // Signing in with Google, or the signed-in account and its monthly plan
-export default function AccountPanel({ textColor, t, lang, onAccessChange }: Props) {
+export default function AccountPanel({ textColor, t, lang, onAccessChange, onSignedOut }: Props) {
   const { data: session, isPending } = authClient.useSession();
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -34,7 +37,12 @@ export default function AccountPanel({ textColor, t, lang, onAccessChange }: Pro
 
   async function signOut() {
     setBusy(true);
-    await authClient.signOut().catch(() => {});
+    const { error } = await authClient.signOut().catch(() => ({ error: true }));
+    // Right away, even if the app cannot hear back about the session after it
+    if (!error) {
+      forgetAccountSettings();
+      onSignedOut();
+    }
     setBusy(false);
   }
 

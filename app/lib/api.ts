@@ -3,6 +3,7 @@ import { promptTerms } from "./glossary";
 import { extractNovelSlug, getGlossary } from "./storage";
 import { parseTranslationStream, STREAM_NONCE_HEADER } from "./stream";
 import { SearchCandidate, SearchErrorCode, SearchResponse } from "./search";
+import { readError } from "./errors";
 
 // Pricing per million tokens: [input, output] in USD
 // Models not listed here have unknown pricing
@@ -25,14 +26,6 @@ function calculateCost(model: string, inputTokens: number, outputTokens: number)
   return `$${cost.toFixed(4)}`;
 }
 
-// Error message from a failed API response. Falls back to the status when the
-// body is not JSON (e.g. a platform timeout page).
-export async function readErrorMessage(res: Response, fallback: string): Promise<string> {
-  const err = await res.json().catch(() => null);
-  if (err?.error) return err.error;
-  if (res.status === 504) return `${fallback}: the server took too long to respond. Please try again.`;
-  return `${fallback} (HTTP ${res.status})`;
-}
 
 export interface FetchContentResult {
   text: string;
@@ -53,7 +46,7 @@ export async function fetchFirstChapterUrl(url: string, signal?: AbortSignal): P
     signal,
   });
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Failed to find the first chapter"));
+    throw await readError(res, "Failed to find the first chapter");
   }
   return (await res.json()).url;
 }
@@ -70,7 +63,7 @@ export async function fetchChapterContent(
   });
 
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Failed to fetch content"));
+    throw await readError(res, "Failed to fetch content");
   }
 
   const data = await res.json();
@@ -109,7 +102,12 @@ export async function searchNovels(
   });
   if (!res.ok) {
     const err = await res.json().catch(() => null);
-    const code = ["needKey", "badKey", "aiFailed", "invalid"].includes(err?.error) ? (err.error as SearchErrorCode) : null;
+    const code =
+      res.status === 429
+        ? "rateLimited"
+        : ["needKey", "badKey", "aiFailed", "invalid"].includes(err?.error)
+          ? (err.error as SearchErrorCode)
+          : null;
     throw new SearchError(code, `Search failed (HTTP ${res.status})`);
   }
   return res.json();
@@ -185,7 +183,7 @@ export async function simplifyText(
   });
 
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Failed to translate"));
+    throw await readError(res, "Failed to translate");
   }
 
   const nonce = res.headers.get(STREAM_NONCE_HEADER) ?? "";

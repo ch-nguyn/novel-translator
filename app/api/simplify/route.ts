@@ -2,9 +2,10 @@ import { createSimplifyStream } from "../../lib/server/simplify";
 import { STREAM_NONCE_HEADER } from "../../lib/stream";
 import { sanitizeTerms } from "../../lib/glossary";
 import { resolveAiAccess } from "../../lib/server/aiAccess";
-import { fetchContent, FetchContentError } from "../../lib/server/fetchContent";
+import { fetchContent } from "../../lib/server/fetchContent";
 import { clientIp } from "../../lib/server/rateLimit";
-import { countPlanChapter, PlanBusyError, planCustomPrompt, releasingStream, takePlanSlot } from "../../lib/server/planLimits";
+import { countPlanChapter, planCustomPrompt, releasingStream, takePlanSlot } from "../../lib/server/planLimits";
+import { ApiError, errorResponse, responseFor } from "../../lib/server/apiError";
 
 export const maxDuration = 300;
 
@@ -23,10 +24,7 @@ export async function POST(req: Request) {
 
     const access = await resolveAiAccess(req, apiKey, model);
     if (!access) {
-      return Response.json(
-        { error: "API key is required. Set it in Settings." },
-        { status: 400 }
-      );
+      return errorResponse("needKey", "API key is required. Set it in Settings.", 400);
     }
 
     const terms = sanitizeTerms(glossary);
@@ -44,7 +42,7 @@ export async function POST(req: Request) {
       try {
         release = once(await takePlanSlot(access.userId!));
       } catch (e) {
-        if (e instanceof PlanBusyError) return Response.json({ error: e.message }, { status: 429 });
+        if (e instanceof ApiError) return responseFor(e);
         throw e;
       }
       // The reader went away (closed the app, opened another chapter), maybe already
@@ -57,7 +55,7 @@ export async function POST(req: Request) {
         ({ text, lang } = await fetchContent(url, undefined, clientIp(req)));
       } catch (e) {
         await release();
-        if (e instanceof FetchContentError) return Response.json({ error: e.message }, { status: e.status });
+        if (e instanceof ApiError) return responseFor(e);
         throw e;
       }
     } else if (!text || typeof text !== "string") {
@@ -86,7 +84,6 @@ export async function POST(req: Request) {
       headers: { "Content-Type": "text/plain; charset=utf-8", [STREAM_NONCE_HEADER]: result.nonce },
     });
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : "Internal server error";
-    return Response.json({ error: message }, { status: 500 });
+    return responseFor(e);
   }
 }

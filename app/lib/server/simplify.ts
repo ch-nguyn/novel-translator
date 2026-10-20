@@ -3,6 +3,7 @@ import { glossaryPrompt } from "../glossary";
 import { openAIBaseUrl, publicAiError } from "./aiAccess";
 import { AI_UNAVAILABLE_ERROR } from "../plan";
 import { endRecord, newStreamNonce, STREAM_ENDED_EARLY_ERROR, TokenUsage } from "../stream";
+import { ApiError, providerErrorCode } from "./apiError";
 
 const VI_PROMPT = `Bạn là biên tập viên chuyên viết lại truyện tiên hiệp/kiếm hiệp tiếng Việt (dịch từ tiếng Trung). Văn gốc thường lủng củng, ngữ pháp sai, từ ngữ khó hiểu. Nhiệm vụ của bạn là viết lại cho mượt mà, đúng văn phong cổ phong nhưng vẫn dễ đọc.
 
@@ -116,7 +117,10 @@ type SseEvent = any;
 
 async function readProviderError(res: Response, provider: string, apiKey: string): Promise<Error> {
   const err = await res.json().catch(() => null);
-  return new Error(publicAiError(apiKey, err?.error?.message || `${provider} error: ${res.status}`));
+  const raw = String(err?.error?.message || `${provider} error: ${res.status}`);
+  const message = publicAiError(apiKey, raw);
+  const code = message === AI_UNAVAILABLE_ERROR ? "aiUnavailable" : providerErrorCode(res.status, raw);
+  return new ApiError(code, message, 502);
 }
 
 // Incremental Server-Sent Events parser (WHATWG spec): lines end in LF, CRLF or
@@ -475,8 +479,10 @@ export async function createSimplifyStream({
   } catch (e) {
     // The provider unreachable, or stopped by `signal`
     if (e instanceof Error && e.name === "AbortError") throw e;
+    if (e instanceof ApiError) throw e;
     const message = e instanceof Error ? e.message : String(e);
-    throw new Error(message === AI_UNAVAILABLE_ERROR ? message : publicAiError(apiKey, message));
+    const shown = message === AI_UNAVAILABLE_ERROR ? message : publicAiError(apiKey, message);
+    throw new ApiError(shown === AI_UNAVAILABLE_ERROR ? "aiUnavailable" : "aiFailed", shown, 502);
   }
   return { stream, nonce };
 }

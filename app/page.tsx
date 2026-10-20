@@ -13,6 +13,9 @@ import {
   getSettings,
   saveSettings,
   getSettingsUpdatedAt,
+  forgetAccountSettings,
+  claimSettings,
+  isSettingsStorageKey,
   getScrollPosition,
   saveScrollPosition,
   getKnownChapters,
@@ -75,7 +78,7 @@ import { getTranslations } from "./lib/i18n";
 import { authClient, SIGNED_IN_PARAM } from "./lib/auth";
 import { pushSettings, syncSettings } from "./lib/settingsSync";
 import { hasSystemAI, refreshSystemAI, setSystemAI as rememberSystemAI } from "./lib/systemAI";
-import { AI_UNAVAILABLE_ERROR } from "./lib/plan";
+import { describeError, ErrorCode, errorText, showsDetails } from "./lib/errors";
 
 // New chapters can be translated: on the app's key, or the user's
 function canTranslateWith(options: TranslateOptions): boolean {
@@ -136,7 +139,9 @@ function HeaderButton({
 
 // Message shown above the chapter text
 type Notice =
-  | { kind: "error"; message: string }
+  // `code` (from describeError) is shown in the reader's language, with
+  // `message` as the details where they help; without it, `message` is shown
+  | { kind: "error"; message: string; code?: ErrorCode }
   // Old chapters were removed because browser storage was full
   | { kind: "evicted"; count: number }
   // A chapter could not be saved even after removing old ones
@@ -208,7 +213,7 @@ export default function Home() {
   const [novelUpdates, setNovelUpdates] = useState<Record<string, NovelUpdate>>({});
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const checkingUpdatesRef = useRef(false);
-  const { data: session, isPending: sessionPending } = authClient.useSession();
+  const { data: session, isPending: sessionPending, error: sessionError } = authClient.useSession();
   const sessionId = session?.session.id ?? null;
   const userId = session?.user.id ?? null;
   const userIdRef = useRef(userId);
@@ -218,6 +223,7 @@ export default function Home() {
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
   const settingsPushRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const settingsPushUserRef = useRef<string | null>(null);
   // The chapter being fetched/translated on screen. Opening another chapter
   // leaves it translating (and saving) in the background, off screen.
   const abortRef = useRef<AbortController | null>(null);
@@ -385,6 +391,12 @@ export default function Home() {
     if (!sessionId) {
       rememberSystemAI(false);
       setSystemAI(false);
+      // Signed out (not merely offline): the account's API keys leave the device
+      // (maybe already, in another tab: shown here too)
+      if (!sessionError) {
+        forgetAccountSettings();
+        setSettings(getSettings());
+      }
       return;
     }
     const controller = new AbortController();
@@ -404,10 +416,12 @@ export default function Home() {
   // A signed-in user's settings come from their account, again whenever the
   // app is brought back (they may have been changed on another device)
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !userId) return;
+    // Before anything is sent or used: another account's keys leave the device
+    if (claimSettings(userId, sessionId)) setSettings(getSettings());
     const controller = new AbortController();
     const sync = () => {
-      syncSettings(sessionId, controller.signal)
+      syncSettings(sessionId, userId, controller.signal)
         .then((synced) => synced && setSettings(synced))
         .catch(() => {});
     };
@@ -423,7 +437,7 @@ export default function Home() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionId, userId]);
 
   // A signed-in user's shelf, places and names come from their account, again
   // whenever the app is brought back; changes made here are sent shortly after
@@ -495,6 +509,8 @@ export default function Home() {
   // Another tab saved chapters or changed names: show them here too
   useEffect(() => {
     const handleStorage = (e: StorageEvent) => {
+      // Changed in another tab (e.g. the keys removed on signing out there)
+      if (isSettingsStorageKey(e.key)) setSettings(getSettings());
       if (isLibraryStorageKey(e.key)) {
         const shelf = getLibrary();
         setLibrary(shelf);
@@ -650,21 +666,25 @@ export default function Home() {
   const closeOverlay = () => setOverlay("none");
 
   function updateSettings(patch: Partial<ReaderSettings>) {
-    const updated = { ...settings, ...patch };
+    // On the stored ones: another tab may have changed them (e.g. removed the keys on signing out)
+    const updated = { ...getSettings(), ...patch };
     setSettings(updated);
     saveSettings(updated);
-    if (!sessionIdRef.current) return;
-    // Typing a key or prompt is sent once it pauses
+    if (!sessionIdRef.current || !userIdRef.current) return;
+    // Typing a key or prompt is sent once it pauses, to the account it was made in
     clearTimeout(settingsPushRef.current);
+    settingsPushUserRef.current = userIdRef.current;
     settingsPushRef.current = setTimeout(flushSettings, SETTINGS_PUSH_DELAY_MS);
   }
 
-  // Sends a change still waiting to be sent to the account
+  // Sends a change still waiting to be sent to the account it was made in
+  // (refused by the server if another has signed in meanwhile)
   function flushSettings() {
     if (settingsPushRef.current === undefined) return;
     clearTimeout(settingsPushRef.current);
     settingsPushRef.current = undefined;
-    if (sessionIdRef.current) pushSettings(getSettings(), getSettingsUpdatedAt()).catch(() => {});
+    const userId = settingsPushUserRef.current;
+    if (userId) pushSettings(userId, getSettings(), getSettingsUpdatedAt()).catch(() => {});
   }
 
   function refreshSaved() {
@@ -791,7 +811,7 @@ export default function Home() {
       if (e instanceof StorageFullError) {
         setNotice({ kind: "storageFull" });
       } else if (e instanceof Error && e.name !== "AbortError") {
-        setNotice({ kind: "error", message: e.message });
+        setNotice({ kind: "error", ...describeError(e) });
         // Failed on the plan: it may have run out since the app last asked
         if (hasSystemAI()) {
           refreshSystemAI().then((on) => {
@@ -823,7 +843,7 @@ export default function Home() {
       setUrl(chapterUrl);
       return chapterUrl;
     } catch (e: unknown) {
-      setNotice({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      setNotice({ kind: "error", ...describeError(e) });
       return null;
     } finally {
       setFetching(false);
@@ -998,7 +1018,7 @@ export default function Home() {
     try {
       chapterUrl = await fetchFirstChapterUrl(novel.url, lookup.signal);
     } catch (e: unknown) {
-      if (!lookup.signal.aborted) setNotice({ kind: "error", message: e instanceof Error ? e.message : String(e) });
+      if (!lookup.signal.aborted) setNotice({ kind: "error", ...describeError(e) });
       return;
     } finally {
       // Not when another lookup took over, or a chapter opened meanwhile is loading (its own state)
@@ -1087,7 +1107,7 @@ export default function Home() {
       await updateGlossary(currentNovelSlug, change);
     } catch (e: unknown) {
       if (e instanceof StorageFullError) setNotice({ kind: "storageFull" });
-      else if (e instanceof Error) setNotice({ kind: "error", message: e.message });
+      else if (e instanceof Error) setNotice({ kind: "error", ...describeError(e) });
     }
     showGlossaryNames(currentNovelSlug);
     refreshSaved();
@@ -1278,8 +1298,8 @@ export default function Home() {
     >
       <span className="flex-1 whitespace-pre-wrap">
         {notice.kind === "error"
-          ? notice.message === AI_UNAVAILABLE_ERROR
-            ? t.aiUnavailable
+          ? notice.code
+            ? errorText(t, notice.code)
             : notice.message
           : notice.kind === "storageFull"
             ? t.storageFull
@@ -1288,6 +1308,11 @@ export default function Home() {
               : notice.kind === "elsewhere"
                 ? t.readElsewhere.replace("{chapter}", notice.chapterTitle || t.anotherChapter)
                 : t.storageEvicted.replace("{n}", String(notice.count))}
+        {notice.kind === "error" && notice.code && showsDetails(notice.code) && notice.message && (
+          <span className="block mt-1 text-xs opacity-70 break-words">
+            {t.errDetails}: {notice.message}
+          </span>
+        )}
       </span>
       {notice.kind === "elsewhere" && (
         <button
@@ -1295,6 +1320,17 @@ export default function Home() {
           className="shrink-0 font-medium text-blue-600 hover:underline cursor-pointer"
         >
           {t.goThere}
+        </button>
+      )}
+      {notice.kind === "error" && (notice.code === "invalidKey" || notice.code === "keyQuota" || notice.code === "aiOutputLimit" || notice.code === "aiRefused") && (
+        <button
+          onClick={() => {
+            setNotice(null);
+            openSettings("ai");
+          }}
+          className="shrink-0 font-medium text-blue-600 hover:underline cursor-pointer"
+        >
+          {t.settings}
         </button>
       )}
       {notice.kind === "planExpired" && (
@@ -1685,7 +1721,13 @@ export default function Home() {
             {settingsTab === "speech" && <SpeechSettings settings={settings} textColor={textColor} t={t} systemAI={systemAI} onUpdate={updateSettings} />}
             {settingsTab === "general" && <GeneralSettings settings={settings} textColor={textColor} t={t} onUpdate={updateSettings} />}
             {settingsTab === "account" && (
-              <AccountPanel textColor={textColor} t={t} lang={settings.appLang} onAccessChange={() => refreshSystemAI().then(setSystemAI)} />
+              <AccountPanel textColor={textColor} t={t} lang={settings.appLang} onAccessChange={() => refreshSystemAI().then(setSystemAI)}
+                onSignedOut={() => {
+                  rememberSystemAI(false);
+                  setSystemAI(false);
+                  setSettings(getSettings());
+                }}
+              />
             )}
             {settingsTab === "contact" && <ContactPanel textColor={textColor} />}
           </TabPanel>

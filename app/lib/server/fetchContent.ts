@@ -2,6 +2,8 @@ import * as cheerio from "cheerio";
 import { lookup } from "dns/promises";
 import { bookPageUrl, canonicalUrl, findSite, isChapterUrl, mirrorUrls } from "../sites";
 import { BrowserBusyError, BrowserLimitError, withBrowserSlot } from "./rateLimit";
+import { ApiError } from "./apiError";
+import type { ErrorCode } from "../errors";
 
 interface SiteConfig {
   content: string;
@@ -307,7 +309,7 @@ export async function fetchWithCheerio(url: string, timeoutMs = FETCH_TIMEOUT_MS
     if (!location) break;
     if (hop >= MAX_REDIRECTS) throw new FetchContentError("Too many redirects", 422);
     url = new URL(location, url).href;
-    if (!getSiteConfig(url)) throw new FetchContentError("The page redirected to an unsupported site", 422);
+    if (!getSiteConfig(url)) throw new FetchContentError("The page redirected to an unsupported site", 422, "unsupportedSite");
   }
 
   if (!res.ok || res.headers.get("cf-mitigated") === "challenge") return null;
@@ -389,7 +391,7 @@ async function fetchWithPuppeteer(url: string): Promise<FetchedPage> {
     await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 });
     // Selectors come from where the page ended up (e.g. a desktop → mobile redirect)
     const finalConfig = getSiteConfig(page.url());
-    if (!finalConfig) throw new FetchContentError("The page redirected to an unsupported site", 422);
+    if (!finalConfig) throw new FetchContentError("The page redirected to an unsupported site", 422, "unsupportedSite");
     const contentSelector = finalConfig.content;
 
     // Wait for content to appear (Cloudflare challenge may take a few seconds)
@@ -401,9 +403,19 @@ async function fetchWithPuppeteer(url: string): Promise<FetchedPage> {
   }
 }
 
-export class FetchContentError extends Error {
-  constructor(message: string, public status: number) {
-    super(message);
+// The code a status means for the reader, unless the error gives its own
+const STATUS_CODES: Record<number, ErrorCode> = {
+  400: "unsupportedSite",
+  422: "noContent",
+  429: "rateLimited",
+  502: "siteFailed",
+  503: "busy",
+  504: "slow",
+};
+
+export class FetchContentError extends ApiError {
+  constructor(message: string, status: number, code?: ErrorCode) {
+    super(code ?? STATUS_CODES[status] ?? "siteFailed", message, status);
   }
 }
 
@@ -480,7 +492,8 @@ export async function fetchContent(url: string, providedHtml?: string, ip?: stri
     } catch (e) {
       if (e instanceof BrowserLimitError) throw new FetchContentError("Too many requests from your network. Please wait a few minutes and try again.", 429);
       if (e instanceof BrowserBusyError) throw new FetchContentError("Many readers are loading chapters right now. Please try again in a moment.", 503);
-      throw e;
+      if (e instanceof ApiError) throw e;
+      throw new FetchContentError(`Could not load the page: ${e instanceof Error ? e.message : e}`, 502);
     }
   }
 

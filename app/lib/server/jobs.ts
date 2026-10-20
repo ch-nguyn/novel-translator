@@ -8,8 +8,10 @@ import { createSimplifyStream } from "./simplify";
 import { parseTranslationStream } from "../stream";
 import { translateTitleBatch } from "./translateTitle";
 import { extractTerms } from "./extractTerms";
-import { SYSTEM_AI_MODEL, systemApiKey } from "./aiAccess";
+import { systemApiKey } from "./aiAccess";
 import { countPlanChapter, waitForPlanSlot } from "./planLimits";
+import { codeOf } from "./apiError";
+import { helperAiFor } from "./helperAi";
 
 // Background translation jobs.
 //
@@ -41,8 +43,9 @@ import { countPlanChapter, waitForPlanSlot } from "./planLimits";
 
 const CHAPTER_TTL_SECONDS = 7 * 24 * 60 * 60;
 const JOB_TTL_SECONDS = 24 * 60 * 60;
-// How often partial text is written while the model is streaming
-const FLUSH_INTERVAL_MS = 1500;
+// How often partial text is written while the model is streaming (each write
+// is the whole chapter so far, read again by every poll of a watching device)
+const FLUSH_INTERVAL_MS = 3000;
 // A claim not refreshed for this long belongs to a dead worker
 const CLAIM_TTL_SECONDS = 60;
 const HEARTBEAT_INTERVAL_MS = 15_000;
@@ -75,6 +78,9 @@ export interface JobStep extends TranslateOptions {
   // Runs on the app's key (`apiKey` is then empty), for this user's plan
   system?: boolean;
   userId?: string;
+  // The address that started the job: its pages fetched with a headless
+  // browser count against it like the ones it asks for itself (see withBrowserSlot)
+  ip?: string;
 }
 
 let redis: Redis | null | undefined;
@@ -158,15 +164,22 @@ export async function forgetReceipt(db: Redis, deviceId: string, url: string) {
   if (chapter?.status === "saved") await db.hdel(chaptersKey(deviceId), url);
 }
 
+// Chapters one request may acknowledge (the device sends more in several)
+export const MAX_ACKNOWLEDGED = 200;
+
 // The device saved (or discarded) these chapters. Finished ones are replaced
 // by a receipt that keeps later jobs from translating them again; unfinished
 // ones are removed so a later job can retry them.
 export async function acknowledgeChapters(db: Redis, deviceId: string, urls: string[]) {
+  if (urls.length === 0) return;
+  const chapters = await db.hmget<Record<string, ChapterJob | null>>(chaptersKey(deviceId), ...urls);
+  const receipts: Record<string, ChapterJob> = {};
+  const dropped: string[] = [];
   for (const url of urls) {
-    const chapter = await getChapter(db, deviceId, url);
+    const chapter = chapters?.[url];
     if (!chapter) continue;
     if (chapter.status === "done") {
-      const receipt: ChapterJob = {
+      receipts[url] = {
         url,
         jobId: chapter.jobId,
         status: "saved",
@@ -179,16 +192,17 @@ export async function acknowledgeChapters(db: Redis, deviceId: string, urls: str
         nextUrl: chapter.nextUrl,
         updatedAt: Date.now(),
       };
-      await db.hset(chaptersKey(deviceId), { [url]: receipt });
     } else if (chapter.status !== "saved") {
-      await db.hdel(chaptersKey(deviceId), url);
+      dropped.push(url);
     }
   }
+  if (Object.keys(receipts).length > 0) await db.hset(chaptersKey(deviceId), receipts);
+  if (dropped.length > 0) await db.hdel(chaptersKey(deviceId), ...dropped);
 }
 
-async function fetchNextUrl(url: string): Promise<string | null> {
+async function fetchNextUrl(url: string, ip: string | undefined): Promise<string | null> {
   try {
-    return (await fetchContent(url)).nextUrl;
+    return (await fetchContent(url, undefined, ip)).nextUrl;
   } catch {
     return null;
   }
@@ -208,14 +222,14 @@ export async function runJobStep(db: Redis, step: JobStep): Promise<JobStep | nu
     remaining--;
 
     if (Object.hasOwn(step.known, url)) {
-      url = step.known[url] ?? (await fetchNextUrl(url));
+      url = step.known[url] ?? (await fetchNextUrl(url, step.ip));
       continue;
     }
 
     const existing = await getChapter(db, step.deviceId, url);
     if (isFinished(existing)) {
       glossary = mergeTerms(glossary, existing!.newTerms ?? []);
-      url = existing!.nextUrl ?? (await fetchNextUrl(url));
+      url = existing!.nextUrl ?? (await fetchNextUrl(url, step.ip));
       continue;
     }
 
@@ -223,7 +237,7 @@ export async function runJobStep(db: Redis, step: JobStep): Promise<JobStep | nu
     const claim = claimKey(step.deviceId, url);
     if (!(await db.set(claim, token, { nx: true, ex: CLAIM_TTL_SECONDS }))) {
       // Another worker is on it and will finish it
-      url = existing?.nextUrl ?? (await fetchNextUrl(url));
+      url = existing?.nextUrl ?? (await fetchNextUrl(url, step.ip));
       continue;
     }
     // The previous owner may have finished between our read and our claim
@@ -231,7 +245,7 @@ export async function runJobStep(db: Redis, step: JobStep): Promise<JobStep | nu
     if (isFinished(latest)) {
       await db.eval(OWNED_RELEASE, [claim], [token]);
       glossary = mergeTerms(glossary, latest!.newTerms ?? []);
-      url = latest!.nextUrl ?? (await fetchNextUrl(url));
+      url = latest!.nextUrl ?? (await fetchNextUrl(url, step.ip));
       continue;
     }
 
@@ -241,6 +255,15 @@ export async function runJobStep(db: Redis, step: JobStep): Promise<JobStep | nu
   }
 
   return null;
+}
+
+// A chapter's titles, on the app's AI for every reader like the titles of a
+// chapter read in the tab, counted against the address that started the job
+// (see helperAi); null when they cannot be translated
+async function translateTitles(step: JobStep, apiKey: string, titles: string[]): Promise<string[] | null> {
+  const ai = helperAiFor(step.ip ?? "jobs", apiKey, step.model);
+  if (!ai || !(await ai.allowCall())) return null;
+  return translateTitleBatch(ai.apiKey, ai.model, titles, ZH_TITLE_PROMPT).catch(() => null);
 }
 
 // Translates one chapter claimed with `token`, writing progress to Redis.
@@ -313,7 +336,7 @@ async function translateChapter(
       await countPlanChapter(step.userId);
     }
 
-    const content = await fetchContent(url);
+    const content = await fetchContent(url, undefined, step.ip);
     await save({
       status: "translating",
       lang: content.lang,
@@ -359,13 +382,7 @@ async function translateChapter(
 
     let { novelName, chapterName } = content;
     const [titles, newTerms] = await Promise.all([
-      content.lang === "zh" && chapterName
-        ? // On the app's AI for every reader, like the titles of a chapter read in the tab (see helperAi)
-          (systemApiKey()
-            ? translateTitleBatch(systemApiKey(), SYSTEM_AI_MODEL, [chapterName, novelName], ZH_TITLE_PROMPT)
-            : translateTitleBatch(apiKey, step.model, [chapterName, novelName], ZH_TITLE_PROMPT)
-          ).catch(() => null)
-        : null,
+      content.lang === "zh" && chapterName ? translateTitles(step, apiKey, [chapterName, novelName]) : null,
       // Remembering names is the plan's (a step started before it was may say otherwise)
       step.useGlossary === false || !step.system
         ? []
@@ -397,7 +414,7 @@ async function translateChapter(
     return { nextUrl: content.nextUrl, newTerms };
   } catch (e: unknown) {
     clearInterval(heartbeat);
-    await save({ status: "error", error: e instanceof Error ? e.message : "Translation failed" }).catch(() => false);
+    await save({ status: "error", error: e instanceof Error ? e.message : "Translation failed", errorCode: codeOf(e) }).catch(() => false);
     return null;
   } finally {
     clearInterval(heartbeat);
@@ -432,14 +449,18 @@ export function signStep(step: JobStep): string {
     step.glossary ?? [],
     step.reasoningEffort ?? null,
     step.useGlossary ?? null,
-    // Last and only when set, so steps signed before it existed still verify
+    // Last and only when set, so steps signed before they existed still verify
     ...(step.userId === undefined ? [] : [step.userId]),
+    // An object, so it is never taken for a userId
+    ...(step.ip === undefined ? [] : [{ ip: step.ip }]),
   ]);
   return createHmac("sha256", signingKey()).update(payload).digest("hex");
 }
 
 export function verifyStep(step: JobStep, signature: unknown): boolean {
   if (typeof signature !== "string" || !signingKey()) return false;
+  // Signed as they are: an object passed as one would sign like the other
+  if (![step.userId, step.ip].every((v) => v === undefined || typeof v === "string")) return false;
   const expected = Buffer.from(signStep(step), "hex");
   const given = Buffer.from(signature, "hex");
   return given.length === expected.length && timingSafeEqual(given, expected);

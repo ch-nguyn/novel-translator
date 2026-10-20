@@ -1,7 +1,8 @@
 import { sanitizeTerms } from "../../../lib/glossary";
 import { extractTerms } from "../../../lib/server/extractTerms";
 import { resolveAiAccess } from "../../../lib/server/aiAccess";
-import { PlanBusyError, takePlanSlot } from "../../../lib/server/planLimits";
+import { takePlanSlot } from "../../../lib/server/planLimits";
+import { ApiError, responseFor } from "../../../lib/server/apiError";
 
 export const maxDuration = 60;
 
@@ -38,7 +39,7 @@ export async function POST(req: Request) {
     try {
       release = await takePlanSlot(access.userId!);
     } catch (e) {
-      if (e instanceof PlanBusyError) return Response.json({ error: e.message }, { status: 429 });
+      if (e instanceof ApiError) return responseFor(e);
       throw e;
     }
     try {
@@ -53,7 +54,8 @@ export async function POST(req: Request) {
     } finally {
       await release();
     }
-  } catch {
+  } catch (e) {
+    if (e instanceof ApiError) return responseFor(e);
     return Response.json({ error: "Invalid request" }, { status: 400 });
   }
 }

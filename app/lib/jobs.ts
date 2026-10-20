@@ -1,6 +1,7 @@
 import { ChapterJob, TranslatedChapter, TranslateOptions } from "./types";
 import { applyNames, mergeTerms, promptTerms } from "./glossary";
-import { ChapterMeta, readErrorMessage } from "./api";
+import { ChapterMeta } from "./api";
+import { CodedError, codeOfMessage, readError } from "./errors";
 import { remembersNames } from "./systemAI";
 import {
   deduplicateTitle,
@@ -21,7 +22,8 @@ import {
 // on the server after the tab is closed, and are pulled into localStorage when
 // the app is opened again.
 
-const POLL_INTERVAL_MS = 1500;
+// The server writes a translating chapter's text every 3s (FLUSH_INTERVAL_MS)
+const POLL_INTERVAL_MS = 3000;
 // Give up on a chapter whose server state has not changed for this long. The
 // server refreshes an in-progress chapter at least every 15s (heartbeat).
 const STALL_TIMEOUT_MS = 120_000;
@@ -30,6 +32,7 @@ const KEEPALIVE_MAX_BYTES = 60_000;
 // After (re)starting a job, how long its worker may take to pick the chapter up
 const RESTART_GRACE_MS = 30_000;
 
+const ACKNOWLEDGE_BATCH = 200;
 // Set once the server reports jobs are not configured; callers then translate in the tab
 let jobsUnavailable = false;
 // Chapters currently shown with live progress; sync leaves them to the watcher
@@ -92,7 +95,10 @@ export async function startBackgroundJob(
     return null;
   }
   if (!res.ok) {
-    throw new Error(await readErrorMessage(res, "Failed to start background translation"));
+    const error = await readError(res, "Failed to start background translation");
+    // Background jobs are down for a moment: the tab translates the chapter itself
+    if (res.status === 503 && error.code === "busy") return null;
+    throw error;
   }
   return (await res.json()).jobId;
 }
@@ -103,10 +109,12 @@ interface JobChapterState {
   alive: boolean;
 }
 
-async function getJobChapter(url: string, signal?: AbortSignal): Promise<JobChapterState> {
+// `since`: the chapter's updatedAt already shown, whose text need not be sent again
+async function getJobChapter(url: string, signal?: AbortSignal, since?: number): Promise<JobChapterState> {
   const params = new URLSearchParams({ deviceId: getDeviceId(), url });
+  if (since) params.set("since", String(since));
   const res = await fetch(`/api/jobs?${params}`, { signal });
-  if (!res.ok) throw new Error("Failed to check translation progress");
+  if (!res.ok) throw await readError(res, "Failed to check translation progress");
   const data = await res.json();
   return { chapter: data.chapter ?? null, alive: !!data.alive };
 }
@@ -150,6 +158,21 @@ function fromSavedChapter(url: string): TranslatedChapter | null {
   };
 }
 
+// Waits while the page is hidden (or until `signal`); whether it was
+function untilVisible(signal: AbortSignal): Promise<boolean> {
+  if (typeof document === "undefined" || document.visibilityState !== "hidden" || signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const done = () => {
+      if (document.visibilityState === "hidden" && !signal.aborted) return;
+      document.removeEventListener("visibilitychange", done);
+      signal.removeEventListener("abort", done);
+      resolve(true);
+    };
+    document.addEventListener("visibilitychange", done);
+    signal.addEventListener("abort", done);
+  });
+}
+
 // Polls a chapter's server-side progress until it is done. `jobId` is the job
 // that was just started for it, if any: an error left by an older job is
 // ignored because the new job retries it. If the worker died (its claim
@@ -163,6 +186,13 @@ export async function watchJobChapter(
   restart?: () => Promise<string | null>
 ): Promise<TranslatedChapter> {
   watching.add(url);
+  // Times the page came back from the background (timers and requests may
+  // have been frozen meanwhile, so what was seen then is stale)
+  let resumes = 0;
+  const onVisibility = () => {
+    if (document.visibilityState === "visible") resumes++;
+  };
+  document.addEventListener("visibilitychange", onVisibility);
   try {
     let metaSent = false;
     let lastUpdatedAt = 0;
@@ -172,29 +202,39 @@ export async function watchJobChapter(
     let restarted = false;
 
     while (true) {
-      const { chapter, alive } = await getJobChapter(url, signal);
+      const seenResumes = resumes;
+      const { chapter, alive } = await getJobChapter(url, signal, lastUpdatedAt);
+      // Came back from the background while asking: the worker gets its time again, and is asked anew
+      if (resumes !== seenResumes) {
+        lastChangeAt = Date.now();
+        graceUntil = Math.max(graceUntil, Date.now() + RESTART_GRACE_MS);
+        continue;
+      }
       const isOldError = chapter?.status === "error" && jobId !== null && chapter.jobId !== jobId;
 
       // Another tab may have saved the chapter (leaving only a receipt or nothing on the server)
       if (!chapter || chapter.status === "saved") {
         const saved = fromSavedChapter(url);
         if (saved) return saved;
-        if (chapter) throw new Error("This chapter was already saved and has since been removed from this device. Please translate it again.");
+        if (chapter) throw new CodedError("chapterGone", "This chapter was already saved and has since been removed from this device. Please translate it again.");
       }
 
       const inProgress = chapter?.status === "fetching" || chapter?.status === "translating";
       // Unfinished, and no worker holds it (it died, or ours has not started yet)
       if (inProgress && !alive) {
         if (Date.now() >= graceUntil) {
-          if (!restart || restarted) throw new Error("Background translation stopped. Please try again.");
+          if (!restart || restarted) throw new CodedError("jobStopped", "Background translation stopped. Please try again.");
           restarted = true;
           jobId = await restart();
-          if (!jobId) throw new Error("Background translation stopped. Please try again.");
+          if (!jobId) throw new CodedError("jobStopped", "Background translation stopped. Please try again.");
           graceUntil = Date.now() + RESTART_GRACE_MS;
           lastChangeAt = Date.now();
         }
       } else if (chapter && !isOldError) {
-        if (chapter.status === "error") throw new Error(chapter.error || "Translation failed");
+        if (chapter.status === "error") {
+          const message = chapter.error || "Translation failed";
+          throw new CodedError(chapter.errorCode ?? codeOfMessage(message), message);
+        }
         if (chapter.status !== "fetching" && !metaSent) {
           onMeta(chapter);
           metaSent = true;
@@ -208,13 +248,20 @@ export async function watchJobChapter(
         lastUpdatedAt = updatedAt;
         lastChangeAt = Date.now();
       } else if (Date.now() - lastChangeAt > STALL_TIMEOUT_MS) {
-        throw new Error("Background translation stopped responding. Please try again.");
+        throw new CodedError("jobStopped", "Background translation stopped responding. Please try again.");
       }
 
+      const seenBeforeWait = resumes;
       await sleep(POLL_INTERVAL_MS, signal);
+      // Not asked while the app is in the background; the server translates on
+      if ((await untilVisible(signal)) || resumes !== seenBeforeWait) {
+        lastChangeAt = Date.now();
+        graceUntil = Math.max(graceUntil, Date.now() + RESTART_GRACE_MS);
+      }
     }
   } finally {
     watching.delete(url);
+    document.removeEventListener("visibilitychange", onVisibility);
   }
 }
 
@@ -222,11 +269,18 @@ export async function watchJobChapter(
 // `cancelNovel` also stops the running job if it is translating that novel.
 export async function acknowledgeJobChapters(urls: string[], cancelNovel?: string) {
   if (jobsUnavailable || (urls.length === 0 && !cancelNovel)) return;
-  const request = fetch("/api/jobs", {
-    method: "DELETE",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ deviceId: getDeviceId(), urls, cancelNovel }),
-  }).then(() => {}, () => {});
+  const send = (batch: string[], cancel?: string) =>
+    fetch("/api/jobs", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId: getDeviceId(), urls: batch, cancelNovel: cancel }),
+    }).then(() => {}, () => {});
+  const request = (async () => {
+    // The server takes at most this many at once (MAX_ACKNOWLEDGED)
+    for (let i = 0; i === 0 || i < urls.length; i += ACKNOWLEDGE_BATCH) {
+      await send(urls.slice(i, i + ACKNOWLEDGE_BATCH), i === 0 ? cancelNovel : undefined);
+    }
+  })();
   // Cancelling matches the novel, not a job: a job started before it arrives would be cancelled too
   if (cancelNovel) pendingCancel = request;
   await request;

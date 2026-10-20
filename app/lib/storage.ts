@@ -8,6 +8,8 @@ const SETTINGS_KEY = "novel-translator-settings";
 // When the settings were last changed, and the sign-in they were last synced in
 const SETTINGS_UPDATED_KEY = "novel-translator-settings-updated";
 const SETTINGS_SESSION_KEY = "novel-translator-settings-session";
+// The account whose settings the device holds (none for a reader not signed in)
+const SETTINGS_OWNER_KEY = "novel-translator-settings-owner";
 const SCROLL_KEY = "novel-translator-scroll";
 const DEVICE_KEY = "novel-translator-device-id";
 const CLEARED_NOVELS_KEY = "novel-translator-cleared-novels";
@@ -566,6 +568,64 @@ export function getSettingsSession(): string | null {
 
 export function setSettingsSession(sessionId: string) {
   localStorage.setItem(SETTINGS_SESSION_KEY, sessionId);
+}
+
+// The settings changed in another tab
+export function isSettingsStorageKey(key: string | null): boolean {
+  return key === null || key === SETTINGS_KEY;
+}
+
+export function getSettingsOwner(): string | null {
+  return localStorage.getItem(SETTINGS_OWNER_KEY);
+}
+
+export function setSettingsOwner(userId: string) {
+  localStorage.setItem(SETTINGS_OWNER_KEY, userId);
+}
+
+// The device's settings are (or were) an account's: they are kept there
+function heldForAccount(): boolean {
+  return !!(getSettingsOwner() || getSettingsSession());
+}
+
+// Removes the API keys from the device (they stay in the account)
+export function clearSecretSettings() {
+  const settings: Record<string, unknown> = { ...getSettings() };
+  if (SECRET_SETTINGS.every((key) => !settings[key])) return;
+  for (const key of SECRET_SETTINGS) settings[key] = "";
+  saveSettings(settings as unknown as ReaderSettings, getSettingsUpdatedAt());
+}
+
+// `userId` signed in with the sign-in `sessionId`: the device's settings
+// become theirs. Settings made without an account are kept (they become the
+// account's if it has none); another account's API keys are removed first,
+// and so are those of a device synced before owners were recorded, when this
+// is not the sign-in it synced with (the account brings its own back).
+// Returns whether keys were removed.
+export function claimSettings(userId: string, sessionId: string): boolean {
+  const owner = getSettingsOwner();
+  const session = getSettingsSession();
+  if (owner === userId || (!owner && (!session || session === sessionId))) {
+    setSettingsOwner(userId);
+    return false;
+  }
+  clearSecretSettings();
+  // Signing in takes the account's settings (see syncSettings)
+  localStorage.removeItem(SETTINGS_SESSION_KEY);
+  setSettingsOwner(userId);
+  return true;
+}
+
+// The account signed out (or its sign-in expired): its API keys leave the
+// device, so the next person on it neither uses them nor carries them into
+// their own account. Signing in again brings them back. Returns whether the
+// device held an account's settings.
+export function forgetAccountSettings(): boolean {
+  if (!heldForAccount()) return false;
+  clearSecretSettings();
+  localStorage.removeItem(SETTINGS_OWNER_KEY);
+  localStorage.removeItem(SETTINGS_SESSION_KEY);
+  return true;
 }
 
 export function getScrollPosition(url: string): number {

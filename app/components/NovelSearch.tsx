@@ -122,6 +122,7 @@ export default function NovelSearch({ t, textColor, apiKey, library, autoFocus, 
     badKey: t.searchBadKey,
     aiFailed: t.searchAiFailed,
     invalid: t.searchFailed,
+    rateLimited: t.errRateLimited,
     failed: t.searchFailed,
   };
   const guess = candidates[picked];

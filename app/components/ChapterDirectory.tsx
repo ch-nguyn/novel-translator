@@ -5,6 +5,7 @@ import { SavedChapter } from "../lib/types";
 import { Translations } from "../lib/i18n";
 import { extractNovelSlug, getNovelUpdates, recordNovelToc } from "../lib/storage";
 import { fetchNovelToc, NovelToc, readableTocTitle, tocChapterNumber, translateTocTitles } from "../lib/toc";
+import { describeError, ErrorCode, errorText } from "../lib/errors";
 
 // Chapters shown at once; a long novel is picked by range
 const PAGE_SIZE = 100;
@@ -26,7 +27,7 @@ interface Props {
 // Every chapter the novel's site lists, marked translated / being read
 export default function ChapterDirectory({ novelUrl, chapters, currentUrl, openaiApiKey, canNavigate, textColor, bgColor, t, onOpen }: Props) {
   const [toc, setToc] = useState<NovelToc | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorCode | null>(null);
   const [loads, setLoads] = useState(0);
   const [page, setPage] = useState<number | null>(null);
   const [jump, setJump] = useState("");
@@ -48,7 +49,7 @@ export default function ChapterDirectory({ novelUrl, chapters, currentUrl, opena
         if (last && loaded.chapters.length > known) recordNovelToc(slug, loaded.chapters.length, last.title);
       })
       .catch((e: unknown) => {
-        if (!controller.signal.aborted) setError(e instanceof Error ? e.message : String(e));
+        if (!controller.signal.aborted) setError(describeError(e).code);
       });
     return () => controller.abort();
   }, [novelUrl, loads]);
@@ -94,7 +95,7 @@ export default function ChapterDirectory({ novelUrl, chapters, currentUrl, opena
     return (
       <div className="p-4 text-center text-sm" style={{ color: textColor + "99" }}>
         <p>{t.tocFailed}</p>
-        <p className="text-xs mt-1" style={{ color: textColor + "60" }}>{error}</p>
+        {error !== "unknown" && <p className="text-xs mt-1" style={{ color: textColor + "80" }}>{errorText(t, error)}</p>}
         <button onClick={() => setLoads((n) => n + 1)} className="mt-3 px-3 py-1.5 rounded-lg border text-sm cursor-pointer" style={{ borderColor: textColor + "30" }}>
           {t.retry}
         </button>

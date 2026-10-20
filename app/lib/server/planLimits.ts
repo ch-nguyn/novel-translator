@@ -1,4 +1,5 @@
 import { count, takeSlot } from "./rateLimit";
+import { ApiError } from "./apiError";
 
 // What the monthly plan's AI (the app's key) is used for: translating the
 // chapters of the novel sites, not any text. A reader never notices these:
@@ -17,22 +18,31 @@ export const MAX_PLAN_CUSTOM_PROMPT = 2000;
 // "[plan-heavy]", then again at every multiple)
 const HEAVY_DAY = 500;
 
-export class PlanBusyError extends Error {
+export class PlanBusyError extends ApiError {
   constructor() {
-    super("Too many chapters are being translated at once on your account. Please wait for them to finish.");
+    super("planBusy", "Too many chapters are being translated at once on your account. Please wait for them to finish.", 429);
+  }
+}
+
+// The slots could not be counted (Redis failing): nothing would limit the
+// account's use of the app's AI then
+export class PlanSlotsUnavailableError extends ApiError {
+  constructor() {
+    super("busy", "Translation on the plan is unavailable for a moment. Please try again in a few minutes.", 503);
   }
 }
 
 // Takes one of the user's slots, waiting up to `waitMs`. Returns how to give
-// it back; throws PlanBusyError when they all stayed taken. Redis failing
-// lets the translation through.
+// it back; throws PlanBusyError when they all stayed taken, and
+// PlanSlotsUnavailableError when Redis fails.
 export async function takePlanSlot(userId: string, waitMs = 0): Promise<() => Promise<void>> {
   const slots = Array.from({ length: SLOTS_PER_USER }, (_, i) => `plan:${userId}:slot:${i + 1}`);
   let release: (() => Promise<void>) | null;
   try {
     release = await takeSlot(slots, SLOT_SECONDS, waitMs);
-  } catch {
-    return async () => {};
+  } catch (e) {
+    console.error(`[plan] no slot, Redis failed: ${e instanceof Error ? e.message : e}`);
+    throw new PlanSlotsUnavailableError();
   }
   if (!release) throw new PlanBusyError();
   return release;

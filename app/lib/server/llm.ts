@@ -1,5 +1,5 @@
 import { isOpenAIReasoningModel } from "../types";
-import { openAIBaseUrl, redactSystemKey } from "./aiAccess";
+import { openAIBaseUrl, redactKey } from "./aiAccess";
 
 // One-shot (non-streaming) model calls for short tasks: title translation,
 // listing a chapter's names. Chapters themselves stream (see simplify.ts).
@@ -35,9 +35,9 @@ interface CompleteParams {
 }
 
 // The failed call is otherwise invisible to the user; log why
-async function fail(task: string, provider: string, res: Response): Promise<never> {
+async function fail(task: string, provider: string, res: Response, apiKey: string): Promise<never> {
   const body = await res.text().catch(() => "");
-  console.error(`[${task}] ${provider} error ${res.status}: ${redactSystemKey(body).slice(0, 300)}`);
+  console.error(`[${task}] ${provider} error ${res.status}: ${redactKey(body, apiKey).slice(0, 300)}`);
   throw new ModelCallError(provider, res.status);
 }
 
@@ -76,10 +76,10 @@ export async function complete({ apiKey, model, system, input, maxTokens, task, 
     let res = await call(reasoningEffort);
     // Models that must reason a little reject "none"
     if (res.status === 400 && reasoningEffort === "none") {
-      console.error(`[${task}] ${model} rejected reasoning effort "none": ${redactSystemKey(await res.text().catch(() => "")).slice(0, 200)}`);
+      console.error(`[${task}] ${model} rejected reasoning effort "none": ${redactKey(await res.text().catch(() => ""), apiKey).slice(0, 200)}`);
       res = await call("low");
     }
-    if (!res.ok) return fail(task, "OpenAI", res);
+    if (!res.ok) return fail(task, "OpenAI", res, apiKey);
     return responsesOutputText(await res.json()).trim();
   }
 
@@ -93,7 +93,7 @@ export async function complete({ apiKey, model, system, input, maxTokens, task, 
         generationConfig: { temperature: 0.1 },
       }),
     });
-    if (!res.ok) return fail(task, "Gemini", res);
+    if (!res.ok) return fail(task, "Gemini", res, apiKey);
     const data = await res.json();
     return data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
   }
@@ -110,7 +110,7 @@ export async function complete({ apiKey, model, system, input, maxTokens, task, 
         temperature: 0.1,
       }),
     });
-    if (!res.ok) return fail(task, "Claude", res);
+    if (!res.ok) return fail(task, "Claude", res, apiKey);
     const data = await res.json();
     return data.content?.[0]?.text?.trim() || "";
   }
@@ -129,7 +129,7 @@ export async function complete({ apiKey, model, system, input, maxTokens, task, 
       temperature: 0.1,
     }),
   });
-  if (!res.ok) return fail(task, provider, res);
+  if (!res.ok) return fail(task, provider, res, apiKey);
   const data = await res.json();
   return data.choices?.[0]?.message?.content?.trim() || "";
 }

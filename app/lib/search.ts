@@ -40,7 +40,7 @@ export interface SearchResponse {
 }
 
 // Why a search could not start: the typed name needs the AI to become Chinese
-export type SearchErrorCode = "needKey" | "badKey" | "aiFailed" | "invalid";
+export type SearchErrorCode = "needKey" | "badKey" | "aiFailed" | "invalid" | "rateLimited";
 
 export const MAX_QUERY_CHARS = 100;
 export const MAX_RESULTS_PER_SITE = 12;
