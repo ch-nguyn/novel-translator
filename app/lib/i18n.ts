@@ -123,9 +123,7 @@ const translations = {
     names: "Names",
     autoGlossary: "Remember names automatically",
     autoGlossaryNote: "Keeps the names of characters, places, techniques... the same in every chapter.",
-    namesPlanOnly: PLAN_OPEN
-      ? "Part of the monthly plan: keeps the names of characters, places, techniques... the same in every chapter, and lets you correct them."
-      : "Coming soon: keeping the names of characters, places, techniques... the same in every chapter.",
+    autoGlossaryKeyNote: "Uses your API key: one more short AI request per chapter.",
     glossaryOff: "Off: new chapters neither use nor remember names.",
     clearAllNames: "Delete all",
     confirmClearNames: "Delete all {n} names of this novel?",
@@ -360,9 +358,7 @@ const translations = {
     names: "Tên riêng",
     autoGlossary: "Tự động ghi nhớ tên riêng",
     autoGlossaryNote: "Giữ tên nhân vật, địa danh, công pháp... thống nhất giữa các chương.",
-    namesPlanOnly: PLAN_OPEN
-      ? "Có trong gói tháng: giữ tên nhân vật, địa danh, công pháp... thống nhất giữa các chương, và sửa được tên theo ý bạn."
-      : "Sắp ra mắt: giữ tên nhân vật, địa danh, công pháp... thống nhất giữa các chương.",
+    autoGlossaryKeyNote: "Dùng API key của bạn: mỗi chương gọi AI thêm một lần ngắn.",
     glossaryOff: "Đang tắt: chương mới sẽ không dùng và không ghi nhớ tên riêng.",
     clearAllNames: "Xóa tất cả",
     confirmClearNames: "Xóa toàn bộ {n} tên riêng của truyện này?",

@@ -8,9 +8,10 @@ export function hasSystemAI(): boolean {
   return typeof localStorage !== "undefined" && localStorage.getItem(SYSTEM_AI_KEY) === "1";
 }
 
-// Names are remembered (see glossary.ts) on the monthly plan only, unless the reader turned it off
+// Names are remembered (see glossary.ts) when the reader turned it on: on the
+// monthly plan by the app's AI, otherwise with their own API key
 export function remembersNames(settings: { autoGlossary: boolean }): boolean {
-  return settings.autoGlossary && hasSystemAI();
+  return settings.autoGlossary;
 }
 
 export function setSystemAI(on: boolean) {

@@ -383,8 +383,8 @@ async function translateChapter(
     let { novelName, chapterName } = content;
     const [titles, newTerms] = await Promise.all([
       content.lang === "zh" && chapterName ? translateTitles(step, apiKey, [chapterName, novelName]) : null,
-      // Remembering names is the plan's (a step started before it was may say otherwise)
-      step.useGlossary === false || !step.system
+      // On the reader's own key only when asked for (a step from before may not say)
+      step.useGlossary === false || (!step.system && step.useGlossary !== true)
         ? []
         : extractTerms({
             apiKey,

@@ -5,8 +5,6 @@ import { GlossaryTerm, TERM_KINDS, TermKind } from "../lib/types";
 import { termKey } from "../lib/glossary";
 import { Translations } from "../lib/i18n";
 import Switch from "./Switch";
-import { PLAN_OPEN, PLAN_PRICE_VND } from "../lib/plan";
-import { formatPrice } from "./SubscriptionPanel";
 
 export function kindLabel(kind: TermKind, t: Translations): string {
   const labels: Record<TermKind, string> = {
@@ -38,9 +36,6 @@ interface Props {
   onToggle: (enabled: boolean) => void;
   // Scanning saved chapters needs an API key and saved chapters
   canScan: boolean;
-  // Translating on the monthly plan, which names are part of
-  systemAI: boolean;
-  onSubscribe: () => void;
   scanChapters: number;
   // Progress of a running scan
   scan: { done: number; total: number } | null;
@@ -65,8 +60,6 @@ export default function GlossaryPanel({
   enabled,
   onToggle,
   canScan,
-  systemAI,
-  onSubscribe,
   scanChapters,
   scan,
   message,
@@ -94,26 +87,6 @@ export default function GlossaryPanel({
       note={enabled ? t.namesHint : t.glossaryOff}
     />
   );
-
-  if (!systemAI) {
-    return (
-      <div
-        className="flex flex-col items-start gap-2 px-3 py-3 rounded-lg border text-sm"
-        style={{ borderColor: "#2563eb60", backgroundColor: "#2563eb10" }}
-      >
-        <span className="font-medium">{t.autoGlossary}</span>
-        <span style={{ color: muted }}>{t.namesPlanOnly}</span>
-        {PLAN_OPEN && (
-          <button
-            onClick={onSubscribe}
-            className="px-3 py-1 rounded-md text-xs font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
-          >
-            {t.planButton.replace("{price}", formatPrice(PLAN_PRICE_VND))}
-          </button>
-        )}
-      </div>
-    );
-  }
 
   if (!novelSlug) {
     return (

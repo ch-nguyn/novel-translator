@@ -81,6 +81,8 @@ const PER_MINUTE = {
   acknowledge: 60,
   // Novel and chapter names translated by the AI
   titles: 30,
+  // Chapters whose names are looked for with the reader's own API key
+  extract: 30,
 };
 
 // A 429 answer when the request's address went over its limit for `bucket`

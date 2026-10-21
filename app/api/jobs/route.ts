@@ -79,8 +79,8 @@ export async function POST(req: Request) {
         customPrompt: access.system ? planCustomPrompt(customPrompt) : customPrompt,
         glossary: terms,
         reasoningEffort,
-        // Remembering names is part of the monthly plan
-        useGlossary: access.system && useGlossary !== false,
+        // On the reader's own key only when asked for (an older app does not say)
+        useGlossary: access.system ? useGlossary !== false : useGlossary === true,
       })
     );
 

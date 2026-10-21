@@ -166,22 +166,13 @@ export default function AISettingsPanel({ settings, systemAI, textColor, t, onUp
         </>
       )}
 
-      {systemAI ? (
-        <Switch
-          label={t.autoGlossary}
-          checked={settings.autoGlossary}
-          onChange={(autoGlossary) => onUpdate({ autoGlossary })}
-          textColor={textColor}
-          note={t.autoGlossaryNote}
-        />
-      ) : (
-        <div>
-          <p className="text-sm font-medium">{t.autoGlossary}</p>
-          <p className="text-xs mt-1" style={{ color: textColor + "50" }}>
-            {t.namesPlanOnly}
-          </p>
-        </div>
-      )}
+      <Switch
+        label={t.autoGlossary}
+        checked={settings.autoGlossary}
+        onChange={(autoGlossary) => onUpdate({ autoGlossary })}
+        textColor={textColor}
+        note={systemAI ? t.autoGlossaryNote : `${t.autoGlossaryNote} ${t.autoGlossaryKeyNote}`}
+      />
 
       {(systemAI || isChatGPT) && <div>
         <label className="text-sm font-medium block mb-2">{t.reasoningEffort}</label>

@@ -2,7 +2,8 @@ import { sanitizeTerms } from "../../../lib/glossary";
 import { extractTerms } from "../../../lib/server/extractTerms";
 import { resolveAiAccess } from "../../../lib/server/aiAccess";
 import { takePlanSlot } from "../../../lib/server/planLimits";
-import { ApiError, responseFor } from "../../../lib/server/apiError";
+import { limitRequest } from "../../../lib/server/rateLimit";
+import { ApiError, errorResponse, responseFor } from "../../../lib/server/apiError";
 
 export const maxDuration = 60;
 
@@ -10,17 +11,20 @@ export const maxDuration = 60;
 const MAX_SOURCE = 50_000;
 const MAX_TRANSLATION = 150_000;
 
-// The names a translated chapter introduced, for the novel's glossary (on the
-// monthly plan only).
+// The names a translated chapter introduced, for the novel's glossary: by the
+// app's AI on the monthly plan, otherwise with the reader's own API key.
 // Used when a chapter is translated in the tab and to scan saved chapters;
 // background jobs call extractTerms themselves.
 export async function POST(req: Request) {
   try {
     const { apiKey, model, source, translation, known } = await req.json();
     const access = await resolveAiAccess(req, apiKey, model);
-    // Remembering names is part of the monthly plan
-    if (!access?.system) {
-      return Response.json({ error: "Remembering names is part of the monthly plan." }, { status: 403 });
+    if (!access) {
+      return errorResponse("needKey", "API key is required. Set it in Settings.", 400);
+    }
+    if (!access.system) {
+      const limited = await limitRequest(req, "extract");
+      if (limited) return limited;
     }
     if (
       typeof source !== "string" ||
@@ -35,12 +39,15 @@ export async function POST(req: Request) {
       return Response.json({ error: "Invalid glossary" }, { status: 400 });
     }
 
-    let release: () => Promise<void>;
-    try {
-      release = await takePlanSlot(access.userId!);
-    } catch (e) {
-      if (e instanceof ApiError) return responseFor(e);
-      throw e;
+    // The plan's chapters at once (the reader's own key is theirs to spend)
+    let release: () => Promise<void> = async () => {};
+    if (access.system) {
+      try {
+        release = await takePlanSlot(access.userId!);
+      } catch (e) {
+        if (e instanceof ApiError) return responseFor(e);
+        throw e;
+      }
     }
     try {
       const terms = await extractTerms({
