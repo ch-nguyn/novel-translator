@@ -4,9 +4,11 @@ import { findSite } from "../sites";
 import { sanitizeTerms } from "../glossary";
 import { GlossaryTerm } from "../types";
 import { LIBRARY_USER_HEADER } from "../librarySync";
+import { replacesPlace } from "../readingPlace";
 
 // A signed-in user's bookshelf, kept so it follows them to another device (see
-// db/library.sql and app/lib/librarySync.ts): per novel, the latest change wins.
+// db/library.sql and app/lib/librarySync.ts): per novel, the place further
+// along wins (see replacesPlace).
 
 // What a device sends about a novel (LibraryEntry without its own bookkeeping)
 export interface ShelfNovel {
@@ -17,6 +19,8 @@ export interface ShelfNovel {
   paragraph: number;
   removed: boolean;
   updatedAt: number;
+  // The device that sent it; "" from an app older than this
+  device: string;
 }
 
 // Novels a user may keep, deleted ones included
@@ -79,13 +83,15 @@ export function sanitizeNovel(input: unknown): ShelfNovel | null {
   const paragraph = raw.paragraph;
   if (typeof paragraph !== "number" || !Number.isSafeInteger(paragraph) || paragraph < 0 || paragraph > 100_000) return null;
   if (typeof raw.removed !== "boolean" || !validUpdatedAt(raw.updatedAt)) return null;
-  return { slug: raw.slug, name, url, chapterTitle, paragraph, removed: raw.removed, updatedAt: raw.updatedAt };
+  const device = raw.device ?? "";
+  if (typeof device !== "string" || !/^[A-Za-z0-9-]{0,64}$/.test(device)) return null;
+  return { slug: raw.slug, name, url, chapterTitle, paragraph, removed: raw.removed, updatedAt: raw.updatedAt, device };
 }
 
 export async function getLibrary(userId: string): Promise<{ novels: ShelfNovel[]; glossaries: { slug: string; updatedAt: number }[] }> {
   const [novels, glossaries] = await Promise.all([
     pool.query(
-      `select "slug", "name", "url", "chapter_title", "paragraph", "removed", "updated_at" from "library_novel" where "user_id" = $1`,
+      `select "slug", "name", "url", "chapter_title", "paragraph", "removed", "updated_at", "device" from "library_novel" where "user_id" = $1`,
       [userId]
     ),
     pool.query(`select "slug", "updated_at" from "library_glossary" where "user_id" = $1`, [userId]),
@@ -99,29 +105,22 @@ export async function getLibrary(userId: string): Promise<{ novels: ShelfNovel[]
       paragraph: r.paragraph,
       removed: r.removed,
       updatedAt: Number(r.updated_at),
+      device: r.device,
     })),
     glossaries: glossaries.rows.map((r) => ({ slug: r.slug, updatedAt: Number(r.updated_at) })),
   };
 }
 
-// Keeps each novel unless the stored one changed later. A deleted novel's
-// names go too. False (nothing kept) if the shelf would grow past MAX_NOVELS.
+// Keeps each novel that wins over the stored one (replacesPlace). A deleted
+// novel's names go too. False (nothing kept) if the shelf would grow past MAX_NOVELS.
 export async function putNovels(userId: string, novels: ShelfNovel[]): Promise<boolean> {
   // The latest of a novel sent twice
   const latest = new Map<string, ShelfNovel>();
   for (const novel of novels) {
     if ((latest.get(novel.slug)?.updatedAt ?? 0) < novel.updatedAt) latest.set(novel.slug, novel);
   }
-  const rows = [...latest.values()].map((n) => ({
-    slug: n.slug,
-    name: n.name,
-    url: n.url,
-    chapter_title: n.chapterTitle,
-    paragraph: n.paragraph,
-    removed: n.removed,
-    updated_at: n.updatedAt,
-  }));
-  if (rows.length === 0) return true;
+  const sent = [...latest.values()];
+  if (sent.length === 0) return true;
   const client = await pool.connect();
   try {
     await client.query("begin");
@@ -129,20 +128,48 @@ export async function putNovels(userId: string, novels: ShelfNovel[]): Promise<b
     await client.query(`select pg_advisory_xact_lock(hashtext('library:' || $1))`, [userId]);
     const { rows: counts } = await client.query(
       `select count(*)::int as "total", count(*) filter (where "slug" = any($2))::int as "known" from "library_novel" where "user_id" = $1`,
-      [userId, rows.map((r) => r.slug)]
+      [userId, sent.map((n) => n.slug)]
     );
-    if (counts[0].total + rows.length - counts[0].known > MAX_NOVELS) {
+    if (counts[0].total + sent.length - counts[0].known > MAX_NOVELS) {
       await client.query("rollback");
       return false;
     }
+    // Compared under the lock: no other write of the user's comes in between
+    const { rows: storedRows } = await client.query(
+      `select "slug", "url", "chapter_title", "paragraph", "removed", "updated_at", "device" from "library_novel" where "user_id" = $1 and "slug" = any($2)`,
+      [userId, sent.map((n) => n.slug)]
+    );
+    const stored = new Map(
+      storedRows.map((r) => [
+        r.slug as string,
+        { url: r.url, chapterTitle: r.chapter_title, paragraph: r.paragraph, removed: r.removed, updatedAt: Number(r.updated_at), device: r.device as string },
+      ])
+    );
+    const rows = sent
+      .filter((n) => {
+        const kept = stored.get(n.slug);
+        return !kept || replacesPlace(kept, n, kept.device === n.device);
+      })
+      .map((n) => ({
+        slug: n.slug,
+        name: n.name,
+        url: n.url,
+        chapter_title: n.chapterTitle,
+        paragraph: n.paragraph,
+        removed: n.removed,
+        // Never earlier than the change it replaces: a place further along
+        // read before it does not let an older deletion through
+        updated_at: Math.max(n.updatedAt, stored.get(n.slug)?.updatedAt ?? 0),
+        device: n.device,
+      }));
     await client.query(
-      `insert into "library_novel" ("user_id", "slug", "name", "url", "chapter_title", "paragraph", "removed", "updated_at")
-       select $1, x."slug", x."name", x."url", x."chapter_title", x."paragraph", x."removed", x."updated_at"
-       from jsonb_to_recordset($2::jsonb) as x("slug" text, "name" text, "url" text, "chapter_title" text, "paragraph" integer, "removed" boolean, "updated_at" bigint)
+      `insert into "library_novel" ("user_id", "slug", "name", "url", "chapter_title", "paragraph", "removed", "updated_at", "device")
+       select $1, x."slug", x."name", x."url", x."chapter_title", x."paragraph", x."removed", x."updated_at", x."device"
+       from jsonb_to_recordset($2::jsonb) as x("slug" text, "name" text, "url" text, "chapter_title" text, "paragraph" integer, "removed" boolean, "updated_at" bigint, "device" text)
        on conflict ("user_id", "slug") do update set
          "name" = excluded."name", "url" = excluded."url", "chapter_title" = excluded."chapter_title",
-         "paragraph" = excluded."paragraph", "removed" = excluded."removed", "updated_at" = excluded."updated_at"
-       where "library_novel"."updated_at" < excluded."updated_at"`,
+         "paragraph" = excluded."paragraph", "removed" = excluded."removed", "updated_at" = excluded."updated_at",
+         "device" = excluded."device"`,
       [userId, JSON.stringify(rows)]
     );
     await client.query(

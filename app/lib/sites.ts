@@ -14,6 +14,10 @@ export interface NovelSite {
   chapterPath: RegExp;
   // Groups chapters by novel: a key unique to the book, from the URL path
   novelSlug: (path: string) => string | null;
+  // A chapter's place in its novel, from its path ([chapter, sub-page]),
+  // comparable with the novel's other chapters; absent when the path does
+  // not tell (see readingPlace.ts)
+  chapterOrder?: (path: string) => number[] | null;
   // Other domains serving the same pages at the same paths: their links are
   // read as this site's, and they are tried when this site fails
   mirrors?: string[];
@@ -33,6 +37,8 @@ export const NOVEL_SITES: NovelSite[] = [
       const bookId = path.match(/^\/\d+\/(\d+)\//)?.[1];
       return bookId ? `biquuge-${bookId}` : null;
     },
+    // Chapter ids grow with each chapter the site adds
+    chapterOrder: (path) => numbersIn(path.match(/\/(\d+)(?:_(\d+))?\.html$/)),
     mirrors: ["biquge520.net"],
   },
   {
@@ -47,6 +53,7 @@ export const NOVEL_SITES: NovelSite[] = [
       const bookId = path.match(/^\/read\/(\d+)\//)?.[1];
       return bookId ? `ixdzs-${bookId}` : null;
     },
+    chapterOrder: (path) => numbersIn(path.match(/\/p(\d+)(?:_(\d+))?\.html$/)),
   },
   {
     domain: "twkan.cc",
@@ -74,8 +81,16 @@ export const NOVEL_SITES: NovelSite[] = [
       const name = path.match(/^\/n\/([a-z0-9_-]+)\//)?.[1];
       return name ? `quanben-${name}` : null;
     },
+    chapterOrder: (path) => numbersIn(path.match(/\/(\d+)\.html$/)),
   },
 ];
+
+// [chapter, sub-page] from a chapter path's match (a chapter's first page is
+// 1); null for numbers too long to compare
+function numbersIn(match: RegExpMatchArray | null): number[] | null {
+  const numbers = match && [Number(match[1]), Number(match[2] ?? 1)];
+  return numbers?.every(Number.isSafeInteger) ? numbers : null;
+}
 
 function parseWebUrl(url: string): URL | null {
   try {

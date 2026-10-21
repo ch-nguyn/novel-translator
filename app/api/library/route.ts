@@ -4,7 +4,7 @@ import { getLibrary, MAX_NOVELS_PER_REQUEST, putNovels, readJson, sameUser, sani
 
 // The signed-in user's bookshelf (app/lib/librarySync.ts): GET returns its
 // novels and when each novel's names last changed; PUT {novels} saves the
-// novels newer than the stored ones.
+// novels that win over the stored ones (further along, see replacesPlace).
 
 async function userId(req: NextRequest): Promise<string | null> {
   const session = await auth.api.getSession({ headers: req.headers });

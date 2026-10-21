@@ -25,6 +25,9 @@ const MAX_LIBRARY = 300;
 const GLOSSARY_SYNC_KEY = "novel-translator-glossary-sync";
 // The account the shelf and names were last synced with
 const LIBRARY_ACCOUNT_KEY = "novel-translator-library-account";
+// Names this device to the account's shelf (not the jobs' DEVICE_KEY, which
+// gives access to its translations)
+const SHELF_DEVICE_KEY = "novel-translator-shelf-device";
 // What the novels' sites listed when last checked, by novel slug (see NovelUpdate)
 const NOVEL_UPDATES_KEY = "novel-translator-novel-updates";
 // One key per novel: `${GLOSSARY_KEY_PREFIX}${novelSlug}`
@@ -229,7 +232,9 @@ export function clearNovelChapters(novelSlug: string) {
   removeNovelData(novelSlug);
   updateLibrary((library) => {
     const entry = library[novelSlug];
-    if (entry) library[novelSlug] = { ...entry, removed: true, updatedAt: nextUpdatedAt(entry), dirty: true };
+    if (!entry) return;
+    const { name, url, chapterTitle, paragraph } = entry;
+    library[novelSlug] = { name, url, chapterTitle, paragraph, removed: true, updatedAt: nextUpdatedAt(entry), dirty: true };
   });
 }
 
@@ -275,7 +280,7 @@ export function getCurrentUrl(): string | null {
 
 // A novel on the reader's shelf. Kept apart from the saved chapters (which
 // come and go) and, for a signed-in user, synced with the account
-// (app/lib/librarySync.ts): the latest change to a novel wins.
+// (app/lib/librarySync.ts): the place further along wins (see readingPlace.ts).
 export interface LibraryEntry {
   name: string;
   // The chapter last opened in it, and the paragraph at the top of the screen
@@ -285,6 +290,9 @@ export interface LibraryEntry {
   paragraph: number;
   // When it last changed, here or on another device
   updatedAt: number;
+  // The device it came from (getShelfDevice), when another's change was
+  // applied here; absent once changed here
+  device?: string;
   // Deleted; kept so the deletion reaches the other devices
   removed?: boolean;
   // Changed here and not sent to the account yet
@@ -380,7 +388,7 @@ function updateLibrary(change: (library: Library) => void) {
 }
 
 // Sets a novel's entry fields; nothing changes if they are already so
-function setLibraryEntry(novelSlug: string, fields: Omit<LibraryEntry, "updatedAt" | "removed" | "dirty">) {
+function setLibraryEntry(novelSlug: string, fields: Omit<LibraryEntry, "updatedAt" | "removed" | "dirty" | "device">) {
   updateLibrary((library) => {
     const entry = library[novelSlug];
     if (
@@ -395,7 +403,8 @@ function setLibraryEntry(novelSlug: string, fields: Omit<LibraryEntry, "updatedA
     ) {
       return;
     }
-    library[novelSlug] = { ...fields, updatedAt: nextUpdatedAt(entry), dirty: true };
+    const { name, url, chapterTitle, paragraph } = fields;
+    library[novelSlug] = { name, url, chapterTitle, paragraph, updatedAt: nextUpdatedAt(entry), dirty: true };
   });
 }
 
@@ -445,7 +454,8 @@ export function setReadingParagraph(url: string, paragraph: number) {
   setLibraryEntry(slug, { ...entry, paragraph });
 }
 
-// Another device's change to a novel, newer than this device's entry.
+// Another device's change to a novel, which wins over this device's entry
+// (see replacesPlace).
 // A deleted novel is deleted here too.
 export function applyRemoteNovel(novelSlug: string, remote: Omit<LibraryEntry, "dirty">) {
   const entry = getLibrary()[novelSlug];
@@ -458,6 +468,16 @@ export function applyRemoteNovel(novelSlug: string, remote: Omit<LibraryEntry, "
   }
   const library = getLibrary();
   library[novelSlug] = { ...remote };
+  saveLibrary(library);
+}
+
+// The account is behind this device's entry (it missed the place, e.g. moved
+// back on another device since): sent again
+export function markNovelUnsynced(novelSlug: string) {
+  const library = getLibrary();
+  const entry = library[novelSlug];
+  if (!entry || entry.dirty) return;
+  entry.dirty = true;
   saveLibrary(library);
 }
 
@@ -672,6 +692,15 @@ export function extractChapterNumber(title: string): number | null {
 }
 
 // Anonymous id that scopes this browser's background jobs on the server
+export function getShelfDevice(): string {
+  let id = localStorage.getItem(SHELF_DEVICE_KEY);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(SHELF_DEVICE_KEY, id);
+  }
+  return id;
+}
+
 export function getDeviceId(): string {
   let id = localStorage.getItem(DEVICE_KEY);
   if (!id) {

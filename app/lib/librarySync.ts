@@ -1,9 +1,11 @@
 import { GlossaryTerm } from "./types";
 import { makeNameFixer, unionTerms } from "./glossary";
+import { replacesPlace } from "./readingPlace";
 import {
   applyRemoteNovel,
   detachLibrary,
   getLibraryAccount,
+  getShelfDevice,
   setLibraryAccount,
   getGlossary,
   getGlossarySync,
@@ -12,6 +14,7 @@ import {
   getUnsyncedGlossaries,
   LibraryEntry,
   markGlossarySynced,
+  markNovelUnsynced,
   markNovelSynced,
   rewriteNovelChapters,
   saveGlossary,
@@ -20,8 +23,8 @@ import {
 
 // A signed-in user's bookshelf follows them to every device (app/api/library):
 // the novels on it, where the reader is in each, and each novel's names.
-// Per novel, the latest change wins; names changed on two devices at once
-// are combined. Chapters stay on the device that translated them.
+// Per novel, the place further along wins (readingPlace.ts); names changed
+// on two devices at once are combined. Chapters stay on the device that translated them.
 // Nothing is sent before the first sync with the signed-in account (`userId`)
 // has settled whose shelf this device has.
 
@@ -32,9 +35,11 @@ function headers(userId: string, json = false): HeadersInit {
   return json ? { [LIBRARY_USER_HEADER]: userId, "Content-Type": "application/json" } : { [LIBRARY_USER_HEADER]: userId };
 }
 
-interface RemoteNovel extends Omit<LibraryEntry, "dirty" | "removed"> {
+interface RemoteNovel extends Omit<LibraryEntry, "dirty" | "removed" | "device"> {
   slug: string;
   removed: boolean;
+  // The device that sent it ("" when sent before devices were told apart)
+  device: string;
 }
 
 export interface LibrarySyncResult {
@@ -58,6 +63,7 @@ export async function pushLibrary(userId: string, keepalive = false, signal?: Ab
     paragraph,
     removed: !!removed,
     updatedAt,
+    device: getShelfDevice(),
   }));
   const res = await fetch("/api/library", {
     method: "PUT",
@@ -167,9 +173,15 @@ export async function syncLibrary(userId: string, currentSlug: string | null, si
     setLibraryAccount(userId);
     const library = getLibrary();
     const withChapters = new Set(getSavedChapters().map((c) => c.novelSlug));
+    const device = getShelfDevice();
     for (const { slug, ...novel } of remote.novels) {
       const entry = library[slug];
-      if (entry && entry.updatedAt >= novel.updatedAt) continue;
+      // Another account's place (see detachLibrary) always gives way
+      if (entry && entry.updatedAt > 0 && !replacesPlace(entry, novel, novel.device === (entry.device ?? device))) {
+        // Sent from here, would it win on the account (as app/lib/server/library.ts decides)?
+        if (replacesPlace(novel, entry, novel.device === device)) markNovelUnsynced(slug);
+        continue;
+      }
       // Deleted before this device ever had it
       if (novel.removed && !entry && !withChapters.has(slug)) continue;
       // Deleted by this account, but read here by another (see detachLibrary): kept
