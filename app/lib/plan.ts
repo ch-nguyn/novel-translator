@@ -2,6 +2,10 @@
 
 export const PLAN_PRICE_VND = 49_000;
 export const PLAN_DAYS = 30;
+// Whether the app offers the plan. Closed: nothing in the app tells of it or
+// takes payment; accounts that already paid keep translating on it until it
+// runs out, and see until when.
+export const PLAN_OPEN = false;
 
 // What the server says about the signed-in user's plan (GET /api/subscription)
 export interface SubscriptionStatus {

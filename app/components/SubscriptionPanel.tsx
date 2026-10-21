@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Translations } from "../lib/i18n";
-import { PLAN_DAYS, PLAN_PRICE_VND, SubscriptionStatus } from "../lib/plan";
+import { PLAN_DAYS, PLAN_OPEN, PLAN_PRICE_VND, SubscriptionStatus } from "../lib/plan";
 
 interface Props {
   textColor: string;
@@ -78,6 +78,9 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
     };
   }, [paying, paidUntil]);
 
+  // Plan closed: only an account still on it sees until when
+  if (!PLAN_OPEN && !status?.active) return null;
+
   const muted = textColor + "80";
   const price = formatPrice(PLAN_PRICE_VND);
   const date = (ms: number) => new Date(ms).toLocaleDateString(lang === "vi" ? "vi-VN" : "en-GB");
@@ -111,7 +114,7 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
             </p>
           )}
           {paid && <p role="status" className="text-sm font-medium text-green-600">{t.planActivated}</p>}
-          {!status.payment ? (
+          {!PLAN_OPEN ? null : !status.payment ? (
             <p className="text-sm" style={{ color: muted }}>{t.planUnavailable}</p>
           ) : paying ? (
             <PaymentDetails payment={status.payment} textColor={textColor} t={t} checkFailed={checkFailed} slow={slow} />

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Translations } from "../lib/i18n";
 import { authClient, signInWithGoogle } from "../lib/auth";
-import { PLAN_PRICE_VND } from "../lib/plan";
+import { PLAN_OPEN, PLAN_PRICE_VND } from "../lib/plan";
 import { forgetAccountSettings } from "../lib/storage";
 import SubscriptionPanel, { formatPrice } from "./SubscriptionPanel";
 
@@ -88,7 +88,7 @@ export default function AccountPanel({ textColor, t, lang, onAccessChange, onSig
             {t.signInGoogle}
           </button>
           {failed && <p role="alert" className="text-sm text-red-600">{t.signInFailed}</p>}
-          <p className="text-sm">{t.planSignIn.replace("{price}", formatPrice(PLAN_PRICE_VND))}</p>
+          {PLAN_OPEN && <p className="text-sm">{t.planSignIn.replace("{price}", formatPrice(PLAN_PRICE_VND))}</p>}
           <p className="text-xs" style={{ color: textColor + "80" }}>{t.accountNote}</p>
         </div>
       )}

@@ -3,7 +3,7 @@
 import { useRef } from "react";
 import { Translations } from "../lib/i18n";
 import { NOVEL_SITES } from "../lib/sites";
-import { PLAN_PRICE_VND } from "../lib/plan";
+import { PLAN_OPEN, PLAN_PRICE_VND } from "../lib/plan";
 import { formatPrice } from "./SubscriptionPanel";
 
 interface Props {
@@ -94,12 +94,14 @@ export default function LinkForm({
         >
           <span>{t.needApiKey}</span>
           <span className="flex gap-2 shrink-0">
-            <button
-              onClick={onSubscribe}
-              className="px-3 py-1 rounded-md text-xs font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
-            >
-              {t.planButton.replace("{price}", formatPrice(PLAN_PRICE_VND))}
-            </button>
+            {PLAN_OPEN && (
+              <button
+                onClick={onSubscribe}
+                className="px-3 py-1 rounded-md text-xs font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
+              >
+                {t.planButton.replace("{price}", formatPrice(PLAN_PRICE_VND))}
+              </button>
+            )}
             <button
               onClick={onAddApiKey}
               className="px-3 py-1 rounded-md text-xs font-medium cursor-pointer text-white bg-amber-600 hover:bg-amber-700"

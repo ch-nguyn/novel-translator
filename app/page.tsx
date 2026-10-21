@@ -38,6 +38,7 @@ import {
 } from "./lib/storage";
 import { LibrarySyncResult, pushGlossaries, pushLibrary, syncGlossary, syncLibrary } from "./lib/librarySync";
 import { checkNovelUpdates } from "./lib/toc";
+import { PLAN_OPEN } from "./lib/plan";
 import { applyNames, editTerm, renameTerm, termKey } from "./lib/glossary";
 import { exportGlossary, importGlossary, scanSavedChapters, SCAN_CHAPTERS, updateGlossary } from "./lib/glossaryActions";
 import { ChapterMeta, fetchChapterContent, fetchFirstChapterUrl, translateChapterDirect } from "./lib/api";
@@ -1337,11 +1338,11 @@ export default function Home() {
         <button
           onClick={() => {
             setNotice(null);
-            openSettings("account");
+            openSettings(PLAN_OPEN ? "account" : "ai");
           }}
           className="shrink-0 font-medium text-blue-600 hover:underline cursor-pointer"
         >
-          {t.planRenew}
+          {PLAN_OPEN ? t.planRenew : t.enterApiKey}
         </button>
       )}
       <button

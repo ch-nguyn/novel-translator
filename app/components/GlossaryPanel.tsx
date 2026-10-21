@@ -5,7 +5,7 @@ import { GlossaryTerm, TERM_KINDS, TermKind } from "../lib/types";
 import { termKey } from "../lib/glossary";
 import { Translations } from "../lib/i18n";
 import Switch from "./Switch";
-import { PLAN_PRICE_VND } from "../lib/plan";
+import { PLAN_OPEN, PLAN_PRICE_VND } from "../lib/plan";
 import { formatPrice } from "./SubscriptionPanel";
 
 export function kindLabel(kind: TermKind, t: Translations): string {
@@ -103,12 +103,14 @@ export default function GlossaryPanel({
       >
         <span className="font-medium">{t.autoGlossary}</span>
         <span style={{ color: muted }}>{t.namesPlanOnly}</span>
-        <button
-          onClick={onSubscribe}
-          className="px-3 py-1 rounded-md text-xs font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
-        >
-          {t.planButton.replace("{price}", formatPrice(PLAN_PRICE_VND))}
-        </button>
+        {PLAN_OPEN && (
+          <button
+            onClick={onSubscribe}
+            className="px-3 py-1 rounded-md text-xs font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
+          >
+            {t.planButton.replace("{price}", formatPrice(PLAN_PRICE_VND))}
+          </button>
+        )}
       </div>
     );
   }

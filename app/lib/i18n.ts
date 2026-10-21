@@ -1,3 +1,5 @@
+import { PLAN_OPEN } from "./plan";
+
 export type AppLang = "en" | "vi";
 
 const translations = {
@@ -13,9 +15,9 @@ const translations = {
     close: "Close",
     emptyTitle: "Find a novel or paste its link to start reading",
     emptyHint: "A novel's page starts from chapter 1; a chapter link starts from that chapter.",
-    needApiKey: "Add an API key or get the monthly plan to translate.",
+    needApiKey: PLAN_OPEN ? "Add an API key or get the monthly plan to translate." : "Add an API key to translate.",
     aiUnavailable: "The translation service is having trouble right now. Please try again in a moment.",
-    planExpiredNotice: "Your plan has run out. Extend it to keep translating.",
+    planExpiredNotice: PLAN_OPEN ? "Your plan has run out. Extend it to keep translating." : "Your plan has run out. Add an API key to keep translating.",
     enterApiKey: "Add API key",
     translate: "Translate",
     fetching: "Fetching...",
@@ -82,7 +84,9 @@ const translations = {
     signInGoogle: "Sign in with Google",
     signOut: "Sign out",
     signInFailed: "Could not sign in. Please try again.",
-    accountNote: "Optional: reading with your own API key needs no account. Sign in to get the monthly plan and keep your settings, library, reading place and names on every device.",
+    accountNote: PLAN_OPEN
+      ? "Optional: reading with your own API key needs no account. Sign in to get the monthly plan and keep your settings, library, reading place and names on every device."
+      : "Optional: reading with your own API key needs no account. Sign in to keep your settings, library and reading place on every device.",
     planName: "Unlimited plan",
     planPrice: "{price}đ / {days} days",
     planPerks: "Translate without an API key, as many chapters as you like, with names remembered across chapters. Listening with the AI voice is not included (the device voice stays free).",
@@ -119,7 +123,9 @@ const translations = {
     names: "Names",
     autoGlossary: "Remember names automatically",
     autoGlossaryNote: "Keeps the names of characters, places, techniques... the same in every chapter.",
-    namesPlanOnly: "Part of the monthly plan: keeps the names of characters, places, techniques... the same in every chapter, and lets you correct them.",
+    namesPlanOnly: PLAN_OPEN
+      ? "Part of the monthly plan: keeps the names of characters, places, techniques... the same in every chapter, and lets you correct them."
+      : "Coming soon: keeping the names of characters, places, techniques... the same in every chapter.",
     glossaryOff: "Off: new chapters neither use nor remember names.",
     clearAllNames: "Delete all",
     confirmClearNames: "Delete all {n} names of this novel?",
@@ -246,9 +252,9 @@ const translations = {
     close: "Đóng",
     emptyTitle: "Tìm truyện hoặc dán link để bắt đầu đọc",
     emptyHint: "Link trang truyện sẽ dịch từ chương 1; link chương sẽ dịch từ chương đó.",
-    needApiKey: "Cần API key hoặc gói tháng để dịch.",
+    needApiKey: PLAN_OPEN ? "Cần API key hoặc gói tháng để dịch." : "Cần API key để dịch.",
     aiUnavailable: "Dịch vụ dịch đang tạm gián đoạn. Vui lòng thử lại sau ít phút.",
-    planExpiredNotice: "Gói của bạn đã hết hạn. Gia hạn để tiếp tục dịch.",
+    planExpiredNotice: PLAN_OPEN ? "Gói của bạn đã hết hạn. Gia hạn để tiếp tục dịch." : "Gói của bạn đã hết hạn. Thêm API key để tiếp tục dịch.",
     enterApiKey: "Nhập API key",
     translate: "Dịch",
     fetching: "Đang tải...",
@@ -315,7 +321,9 @@ const translations = {
     signInGoogle: "Đăng nhập bằng Google",
     signOut: "Đăng xuất",
     signInFailed: "Không đăng nhập được. Vui lòng thử lại.",
-    accountNote: "Không bắt buộc: dùng API key của bạn thì không cần tài khoản. Đăng nhập để mua gói tháng và đồng bộ cài đặt, tủ truyện, chỗ đang đọc và tên riêng giữa các thiết bị.",
+    accountNote: PLAN_OPEN
+      ? "Không bắt buộc: dùng API key của bạn thì không cần tài khoản. Đăng nhập để mua gói tháng và đồng bộ cài đặt, tủ truyện, chỗ đang đọc và tên riêng giữa các thiết bị."
+      : "Không bắt buộc: dùng API key của bạn thì không cần tài khoản. Đăng nhập để đồng bộ cài đặt, tủ truyện và chỗ đang đọc giữa các thiết bị.",
     planName: "Gói không giới hạn",
     planPrice: "{price}đ / {days} ngày",
     planPerks: "Dịch không cần API key, không giới hạn số chương, tự động ghi nhớ tên riêng. Không bao gồm nghe truyện bằng giọng AI (giọng của máy vẫn miễn phí).",
@@ -352,7 +360,9 @@ const translations = {
     names: "Tên riêng",
     autoGlossary: "Tự động ghi nhớ tên riêng",
     autoGlossaryNote: "Giữ tên nhân vật, địa danh, công pháp... thống nhất giữa các chương.",
-    namesPlanOnly: "Có trong gói tháng: giữ tên nhân vật, địa danh, công pháp... thống nhất giữa các chương, và sửa được tên theo ý bạn.",
+    namesPlanOnly: PLAN_OPEN
+      ? "Có trong gói tháng: giữ tên nhân vật, địa danh, công pháp... thống nhất giữa các chương, và sửa được tên theo ý bạn."
+      : "Sắp ra mắt: giữ tên nhân vật, địa danh, công pháp... thống nhất giữa các chương.",
     glossaryOff: "Đang tắt: chương mới sẽ không dùng và không ghi nhớ tên riêng.",
     clearAllNames: "Xóa tất cả",
     confirmClearNames: "Xóa toàn bộ {n} tên riêng của truyện này?",
