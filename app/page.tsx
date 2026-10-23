@@ -49,6 +49,7 @@ import {
   discardNovelJobs,
   getJobChapterStatus,
   getLastJobStartAt,
+  isWatchingJob,
   saveTranslatedChapter,
   startBackgroundJob,
   syncFinishedJobs,
@@ -102,6 +103,16 @@ const GLOSSARY_FETCH_TIMEOUT_MS = 4000;
 const CONTINUE_NOVELS = 3;
 // Novels whose sites are asked for new chapters, the most recently read first
 const MAX_CHECKED_NOVELS = 20;
+// While the server translates ahead, the chapters it finishes are brought in
+// this often, so Next opens them at once…
+const JOB_POLL_INTERVAL_MS = 15_000;
+// …for at most this long after a job was started (or found running)…
+const JOB_POLL_MAX_MS = 10 * 60 * 1000;
+// …and at least this long, while the job's first chapter may not be on the server yet
+const JOB_POLL_GRACE_MS = 45_000;
+// Stopped once this many polls in a row find nothing translating (one may land
+// between two chapters, before the job has written the next)
+const JOB_POLL_IDLE_POLLS = 2;
 type SettingsTab = "ai" | "speech" | "general" | "account" | "contact";
 
 function HeaderButton({
@@ -214,6 +225,8 @@ export default function Home() {
   const [novelUpdates, setNovelUpdates] = useState<Record<string, NovelUpdate>>({});
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const checkingUpdatesRef = useRef(false);
+  // Until when the chapters translated ahead are brought in (JOB_POLL_INTERVAL_MS)
+  const jobPollUntilRef = useRef(0);
   const { data: session, isPending: sessionPending, error: sessionError } = authClient.useSession();
   const sessionId = session?.session.id ?? null;
   const userId = session?.user.id ?? null;
@@ -331,16 +344,48 @@ export default function Home() {
 
       // After loading the chapter, which clears notices
       applySyncResult(result);
+      followJobs(result);
       checkForNewChapters(false);
     });
 
     const handleVisible = () => {
       if (document.visibilityState === "visible") {
-        syncFinishedJobs().then(applySyncResult);
+        syncFinishedJobs().then((result) => {
+          applySyncResult(result);
+          followJobs(result);
+        });
+        // The app may have stayed open in the background for hours
+        checkForNewChapters(false);
       }
     };
     document.addEventListener("visibilitychange", handleVisible);
     return () => document.removeEventListener("visibilitychange", handleVisible);
+  }, []);
+
+  // Brings in the chapters the server translates ahead while the reader reads
+  // (not only when they move on or come back to the app): from when a job is
+  // started or found running until it has none left to translate
+  useEffect(() => {
+    let seenJobStart = getLastJobStartAt();
+    let idlePolls = 0;
+    const timer = setInterval(() => {
+      if (getLastJobStartAt() !== seenJobStart) {
+        seenJobStart = getLastJobStartAt();
+        jobPollUntilRef.current = Date.now() + JOB_POLL_MAX_MS;
+      }
+      if (Date.now() > jobPollUntilRef.current || document.visibilityState !== "visible") return;
+      syncFinishedJobs().then((result) => {
+        applySyncResult(result);
+        const idle = result.pending === 0 && !isWatchingJob() && Date.now() - getLastJobStartAt() > JOB_POLL_GRACE_MS;
+        idlePolls = idle ? idlePolls + 1 : 0;
+        if (idlePolls >= JOB_POLL_IDLE_POLLS) {
+          jobPollUntilRef.current = 0;
+          idlePolls = 0;
+        }
+      });
+    }, JOB_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Save scroll position on scroll (debounced) and show/hide scroll-to-top button
@@ -696,6 +741,12 @@ export default function Home() {
   function applySyncResult({ saved, evicted }: SyncResult) {
     if (saved) refreshSaved();
     if (evicted) setNotice({ kind: "evicted", count: evicted });
+  }
+
+  // The server is still translating ahead (a job started before the app was
+  // opened, or while it was in the background): its chapters are brought in
+  function followJobs({ pending }: SyncResult) {
+    if (pending) jobPollUntilRef.current = Math.max(jobPollUntilRef.current, Date.now() + JOB_POLL_MAX_MS);
   }
 
   type ChapterProducer = (

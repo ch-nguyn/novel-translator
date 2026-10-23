@@ -37,6 +37,8 @@ const ACKNOWLEDGE_BATCH = 200;
 let jobsUnavailable = false;
 // Chapters currently shown with live progress; sync leaves them to the watcher
 const watching = new Set<string>();
+// Whether a chapter on screen is still being translated
+export const isWatchingJob = () => watching.size > 0;
 
 function sleep(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
@@ -347,6 +349,8 @@ export interface SyncResult {
   saved: number;
   // Old chapters removed to make room in browser storage
   evicted: number;
+  // Chapters the server is still translating ahead; null when not known
+  pending: number | null;
 }
 
 // Saves every chapter the server finished while the app was closed.
@@ -354,7 +358,7 @@ export interface SyncResult {
 // current novel" is on, are discarded instead. Skipped if another tab is
 // already syncing.
 export async function syncFinishedJobs(): Promise<SyncResult> {
-  const result: SyncResult = { saved: 0, evicted: 0 };
+  const result: SyncResult = { saved: 0, evicted: 0, pending: null };
   if (jobsUnavailable) return result;
   if (typeof navigator !== "undefined" && navigator.locks) {
     return navigator.locks.request("novel-translator-storage", { ifAvailable: true }, async (lock) =>
@@ -374,6 +378,10 @@ async function syncLocked(result: SyncResult): Promise<SyncResult> {
     if (!res.ok) return result;
 
     const chapters: ChapterJob[] = (await res.json()).chapters;
+    // A worker refreshes its chapter every 15s; one left alone this long has died
+    const working = (c: ChapterJob) =>
+      (c.status === "fetching" || c.status === "translating") && Date.now() - c.updatedAt < STALL_TIMEOUT_MS;
+    result.pending = chapters.filter((c) => working(c) && !watching.has(c.url)).length;
     const finished = chapters
       .filter((c) => c.status === "done" && !watching.has(c.url))
       .sort((a, b) => a.updatedAt - b.updatedAt);

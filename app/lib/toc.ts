@@ -113,18 +113,26 @@ export async function translateTocTitles(titles: string[], apiKey: string, signa
 export const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 // Sites asked at once
 const CHECK_CONCURRENCY = 2;
+// When this tab last asked about each novel, answered or not: a site that is
+// down is not asked again each time the app is brought back
+const updateAsked = new Map<string, number>();
 
 // Looks up how many chapters each novel's site lists now (see recordNovelToc).
 // `urls`: a chapter of each novel. Without `force`, novels checked recently
 // are skipped. Returns the slugs of the novels that have chapters they did not have before.
 export async function checkNovelUpdates(urls: string[], { force = false, signal }: { force?: boolean; signal?: AbortSignal } = {}): Promise<string[]> {
   const updates = getNovelUpdates();
-  const due = urls.filter((url) => force || !(Date.now() - (updates[extractNovelSlug(url)]?.checkedAt ?? 0) < UPDATE_CHECK_INTERVAL_MS));
+  const recent = (at = 0) => Date.now() - at < UPDATE_CHECK_INTERVAL_MS;
+  const due = urls.filter((url) => {
+    const slug = extractNovelSlug(url);
+    return force || !(recent(updates[slug]?.checkedAt) || recent(updateAsked.get(slug)));
+  });
   const grown: string[] = [];
   const queue = [...due];
   const worker = async () => {
     for (let url = queue.shift(); url && !signal?.aborted; url = queue.shift()) {
       try {
+        updateAsked.set(extractNovelSlug(url), Date.now());
         const params = new URLSearchParams({ url, summary: "1" });
         // A different address skips the server's cached answer
         if (force) params.set("at", String(Date.now()));
