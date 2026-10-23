@@ -1,5 +1,5 @@
 import { GlossaryTerm, TranslatedChapter, TranslateOptions, ZH_TITLE_PROMPT } from "./types";
-import { promptTerms } from "./glossary";
+import { memoryTerms, promptTerms } from "./glossary";
 import { extractNovelSlug, getGlossary } from "./storage";
 import { parseTranslationStream, STREAM_NONCE_HEADER } from "./stream";
 import { SearchCandidate, SearchErrorCode, SearchResponse } from "./search";
@@ -221,8 +221,9 @@ export async function simplifyText(
   return result;
 }
 
-// The names `translation` introduced that `known` does not have yet. Never
-// throws: the chapter is complete without them.
+// The names `translation` introduced that `known` does not have yet (and
+// known ones it told something new of), and a summary of it. Never throws:
+// the chapter is complete without them.
 export async function extractChapterTerms(
   url: string,
   source: string,
@@ -230,19 +231,19 @@ export async function extractChapterTerms(
   known: GlossaryTerm[],
   options: TranslateOptions,
   signal?: AbortSignal
-): Promise<GlossaryTerm[]> {
+): Promise<{ terms: GlossaryTerm[]; summary?: string }> {
   try {
     const res = await fetch("/api/glossary/extract", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, source, translation, known: promptTerms(known), apiKey: options.apiKey, model: options.model }),
+      body: JSON.stringify({ url, source, translation, known: memoryTerms(known), apiKey: options.apiKey, model: options.model }),
       signal,
     });
-    if (!res.ok) return [];
-    const { terms } = await res.json();
-    return Array.isArray(terms) ? terms : [];
+    if (!res.ok) return { terms: [] };
+    const { terms, summary } = await res.json();
+    return { terms: Array.isArray(terms) ? terms : [], summary: typeof summary === "string" && summary ? summary : undefined };
   } catch {
-    return [];
+    return { terms: [] };
   }
 }
 
@@ -275,12 +276,12 @@ export async function translateChapterDirect(
   );
 
   let { title, novelName, chapterName } = data;
-  const [translated, newTerms] = await Promise.all([
+  const [translated, memory] = await Promise.all([
     // Both titles in a single call
     data.lang === "zh" && chapterName
       ? translateTitles([chapterName, novelName], options.apiKey, options.model, ZH_TITLE_PROMPT)
       : null,
-    useGlossary ? extractChapterTerms(url, data.text, text, glossary, options, signal) : [],
+    useGlossary ? extractChapterTerms(url, data.text, text, glossary, options, signal) : null,
   ]);
   if (translated) {
     chapterName = translated[0] || chapterName;
@@ -288,5 +289,5 @@ export async function translateChapterDirect(
     title = chapterName;
   }
 
-  return { text, title, novelName, chapterName, prevUrl: data.prevUrl, nextUrl: data.nextUrl, newTerms };
+  return { text, title, novelName, chapterName, prevUrl: data.prevUrl, nextUrl: data.nextUrl, newTerms: memory?.terms ?? [], summary: memory?.summary };
 }

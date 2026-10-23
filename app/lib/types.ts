@@ -124,7 +124,10 @@ export interface TranslatedChapter {
   prevUrl: string | null;
   nextUrl: string | null;
   // Names found in this chapter that the novel's glossary did not have yet
+  // (or, with `notes`, what the chapter told of names it had)
   newTerms?: GlossaryTerm[];
+  // What happened in the chapter, in a sentence or two (with the names)
+  summary?: string;
 }
 
 export type TermKind = "character" | "place" | "organization" | "skill" | "item" | "other";
@@ -143,6 +146,31 @@ export interface GlossaryTerm {
   aliases?: string[];
   // Set or corrected by the user, so never changed by a translation
   edited?: boolean;
+  // What the chapters told of it, oldest first (see TermNote)
+  notes?: TermNote[];
+}
+
+// Something a chapter told of a name: who or what it is when it first comes
+// up, later what changed (a breakthrough, a death, a betrayal...). Shown to
+// a reader who has reached `order` (see app/lib/readingPlace.ts).
+export interface TermNote {
+  text: string;
+  // The chapter that told it: its title, and its place in the novel when known
+  chapter?: string;
+  order?: number[];
+  // When that chapter was saved (ms): which came first when places are not known
+  at?: number;
+}
+
+// A chapter's summary, kept per novel to remind a returning reader of what
+// happened (see app/lib/recaps.ts)
+export interface ChapterRecap {
+  url: string;
+  title: string;
+  summary: string;
+  order?: number[];
+  // When it was saved (ms), to order recaps whose chapters' order is not known
+  at: number;
 }
 
 export interface TranslateOptions {

@@ -1,6 +1,7 @@
 import { GlossaryTerm, TranslateOptions } from "./types";
-import { importTerms, makeNameFixer, mergeTerms, sanitizeTerms } from "./glossary";
-import { getClearedNovels, getGlossary, getSavedChapters, rewriteNovelChapters, saveGlossary, withStorageLock } from "./storage";
+import { importTerms, makeNameFixer, mergeTerms, sanitizeTerms, stampNotes } from "./glossary";
+import { chapterOrder } from "./readingPlace";
+import { addRecaps, getClearedNovels, getGlossary, getRecaps, getSavedChapters, rewriteNovelChapters, saveGlossary, withStorageLock } from "./storage";
 import { extractChapterTerms, fetchChapterContent } from "./api";
 import { downloadBlob, safeFilename } from "./exportNovel";
 
@@ -45,17 +46,25 @@ export async function scanSavedChapters(
     const chapter = chapters[i];
     try {
       const { text: source } = await fetchChapterContent(chapter.url, signal);
-      const found = await extractChapterTerms(chapter.url, source, chapter.simplifiedText, getGlossary(novelSlug), options, signal);
+      const { terms: found, summary } = await extractChapterTerms(chapter.url, source, chapter.simplifiedText, getGlossary(novelSlug), options, signal);
       if (signal.aborted) break;
+      const order = chapterOrder(chapter.url, chapter.title);
       await updateGlossary(
         novelSlug,
         (terms) => {
-          const merged = mergeTerms(terms, found);
+          const merged = mergeTerms(terms, stampNotes(found, chapter.title, order, chapter.savedAt));
           added += merged.length - terms.length;
           return merged;
         },
         signal
       );
+      // A summary for the reminders, if the chapter had none
+      if (summary && !getRecaps(novelSlug).some((r) => r.url === chapter.url)) {
+        const recap = { url: chapter.url, title: chapter.title, summary, at: chapter.savedAt, ...(order ? { order } : {}) };
+        await withStorageLock(() => {
+          if (!signal.aborted && !getClearedNovels().has(novelSlug)) addRecaps(novelSlug, [recap]);
+        });
+      }
     } catch {
       // Skip a chapter that cannot be fetched; stop when cancelled
     }

@@ -23,5 +23,8 @@ create table if not exists "library_glossary" (
   "slug" text not null,
   "terms" jsonb not null,
   "updated_at" bigint not null,
+  -- The novel's chapter summaries (app/lib/recaps.ts), changed with its names
+  "recaps" jsonb not null default '[]',
   primary key ("user_id", "slug")
 );
+alter table "library_glossary" add column if not exists "recaps" jsonb not null default '[]';

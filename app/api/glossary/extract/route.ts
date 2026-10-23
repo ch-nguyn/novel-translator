@@ -11,7 +11,8 @@ export const maxDuration = 60;
 const MAX_SOURCE = 50_000;
 const MAX_TRANSLATION = 150_000;
 
-// The names a translated chapter introduced, for the novel's glossary: by the
+// The names a translated chapter introduced (with what it told of them) and a
+// summary of it, for the novel's glossary and recaps: by the
 // app's AI on the monthly plan, otherwise with the reader's own API key.
 // Used when a chapter is translated in the tab and to scan saved chapters;
 // background jobs call extractTerms themselves.
@@ -50,14 +51,14 @@ export async function POST(req: Request) {
       }
     }
     try {
-      const terms = await extractTerms({
+      const { terms, summary } = await extractTerms({
         apiKey: access.apiKey,
         model: access.model,
         source,
         translation,
         known: knownTerms,
       });
-      return Response.json({ terms });
+      return Response.json({ terms, summary });
     } finally {
       await release();
     }

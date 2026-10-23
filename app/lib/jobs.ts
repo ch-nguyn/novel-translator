@@ -1,9 +1,11 @@
 import { ChapterJob, TranslatedChapter, TranslateOptions } from "./types";
-import { applyNames, mergeTerms, promptTerms } from "./glossary";
+import { applyNames, memoryTerms, mergeTerms, stampNotes } from "./glossary";
 import { ChapterMeta } from "./api";
 import { CodedError, codeOfMessage, readError } from "./errors";
 import { remembersNames } from "./systemAI";
+import { chapterOrder } from "./readingPlace";
 import {
+  addRecaps,
   deduplicateTitle,
   extractNovelSlug,
   getClearedNovels,
@@ -82,7 +84,7 @@ export async function startBackgroundJob(
   if (remember) setPendingWindow(url);
   await pendingCancel;
 
-  const glossary = options.useGlossary === false ? [] : promptTerms(getGlossary(extractNovelSlug(url)));
+  const glossary = options.useGlossary === false ? [] : memoryTerms(getGlossary(extractNovelSlug(url)));
   const body = JSON.stringify({ deviceId: getDeviceId(), url, known, force, glossary, ...options });
   const res = await fetch("/api/jobs", {
     method: "POST",
@@ -317,10 +319,14 @@ export function saveTranslatedChapter(
   let text = chapter.text;
   // Chapters removed to make room
   let evictedForNames = 0;
+  const others = getSavedChapters().filter((c) => c.url !== url);
+  const title = deduplicateTitle(chapter.chapterName || chapter.title || url, novelSlug, others);
+  const savedAt = Date.now();
   // Unless the user turned the glossary off
   if (remembersNames(getSettings())) {
+    const order = chapterOrder(url, title);
     const known = getGlossary(novelSlug);
-    const glossary = mergeTerms(known, chapter.newTerms ?? []);
+    const glossary = mergeTerms(known, stampNotes(chapter.newTerms ?? [], title, order, savedAt));
     if (glossary !== known) {
       try {
         evictedForNames = saveGlossary(novelSlug, glossary);
@@ -329,9 +335,10 @@ export function saveTranslatedChapter(
       }
     }
     text = applyNames(chapter.text, glossary);
+    if (chapter.summary) {
+      addRecaps(novelSlug, [{ url, title, summary: applyNames(chapter.summary, glossary), at: savedAt, ...(order ? { order } : {}) }]);
+    }
   }
-  const others = getSavedChapters().filter((c) => c.url !== url);
-  const title = deduplicateTitle(chapter.chapterName || chapter.title || url, novelSlug, others);
   const evicted = saveChapter({
     url,
     title,
@@ -340,7 +347,7 @@ export function saveTranslatedChapter(
     simplifiedText: text,
     prevUrl: chapter.prevUrl,
     nextUrl: chapter.nextUrl,
-    savedAt: Date.now(),
+    savedAt,
   });
   return { text, title, evicted: evicted + evictedForNames };
 }

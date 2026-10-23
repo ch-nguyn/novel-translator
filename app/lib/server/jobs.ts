@@ -381,11 +381,11 @@ async function translateChapter(
     }
 
     let { novelName, chapterName } = content;
-    const [titles, newTerms] = await Promise.all([
+    const [titles, memory] = await Promise.all([
       content.lang === "zh" && chapterName ? translateTitles(step, apiKey, [chapterName, novelName]) : null,
       // On the reader's own key only when asked for (a step from before may not say)
       step.useGlossary === false || (!step.system && step.useGlossary !== true)
-        ? []
+        ? null
         : extractTerms({
             apiKey,
             model: step.model,
@@ -398,6 +398,7 @@ async function translateChapter(
       chapterName = titles[0] || chapterName;
       novelName = titles[1] || novelName;
     }
+    const newTerms = memory?.terms ?? [];
 
     clearInterval(heartbeat);
     const saved = await save({
@@ -407,6 +408,7 @@ async function translateChapter(
       chapterName,
       title: content.lang === "zh" ? chapterName : content.title,
       newTerms,
+      ...(memory?.summary ? { summary: memory.summary } : {}),
     });
     // A worker that lost its claim did not write anything
     if (!saved) return null;

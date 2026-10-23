@@ -1,4 +1,5 @@
-import { GlossaryTerm, TERM_KINDS, TermKind } from "./types";
+import { GlossaryTerm, TERM_KINDS, TermKind, TermNote } from "./types";
+import { compareOrder, sortByChapter } from "./sites";
 
 // A novel's glossary: the names its translations use, so every chapter writes
 // them the same way. Built automatically (each translated chapter reports the
@@ -15,6 +16,10 @@ const MAX_TARGET_LENGTH = 60;
 const MAX_ALIASES = 10;
 // Names given to the model with one chapter
 const MAX_PROMPT_TERMS = 300;
+// Notes kept per name: the first (who it is) and the latest
+const MAX_NOTES = 6;
+export const MAX_NOTE_LENGTH = 160;
+const MAX_NOTE_CHAPTER_LENGTH = 100;
 
 // Collapses whitespace (names go into prompts and regexes one per line)
 function cleanName(value: unknown, maxLength: number): string | null {
@@ -45,9 +50,65 @@ export function sanitizeTerms(value: unknown, max = MAX_STORED_TERMS): GlossaryT
       if (aliases.length > 0) term.aliases = [...new Set(aliases)].slice(0, MAX_ALIASES);
     }
     if (raw.edited === true) term.edited = true;
+    const notes = sanitizeNotes(raw.notes);
+    if (notes.length > 0) term.notes = notes;
     terms.push(term);
   }
   return terms;
+}
+
+// A place in a novel (see chapterOrder): a few whole numbers, else undefined
+export function sanitizeOrder(value: unknown): number[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 3) return undefined;
+  return value.every((n) => Number.isSafeInteger(n) && n >= 0) ? (value as number[]) : undefined;
+}
+
+function sanitizeNotes(value: unknown): TermNote[] {
+  if (!Array.isArray(value)) return [];
+  const notes: TermNote[] = [];
+  for (const item of value.slice(-MAX_NOTES)) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Record<string, unknown>;
+    const text = cleanName(raw.text, MAX_NOTE_LENGTH);
+    if (!text) continue;
+    const note: TermNote = { text };
+    const chapter = cleanName(raw.chapter, MAX_NOTE_CHAPTER_LENGTH);
+    if (chapter) note.chapter = chapter;
+    const order = sanitizeOrder(raw.order);
+    if (order) note.order = order;
+    if (Number.isSafeInteger(raw.at) && (raw.at as number) > 0) note.at = raw.at as number;
+    notes.push(note);
+  }
+  return notes;
+}
+
+// Adds what chapters told of a name to what was known, in the order of the
+// chapters (they may come in any order, e.g. a scan goes backwards); the same
+// note again is not repeated. Unchanged (the same array) if nothing was new.
+function addNotes(known: TermNote[] | undefined, incoming: TermNote[] | undefined): TermNote[] | undefined {
+  const fresh = (incoming ?? []).filter((note, i, all) => !known?.some((k) => k.text === note.text) && all.findIndex((n) => n.text === note.text) === i);
+  if (fresh.length === 0) return known;
+  const notes = sortByChapter([...(known ?? []), ...fresh]);
+  // The first says who it is
+  return notes.length > MAX_NOTES ? [notes[0], ...notes.slice(-(MAX_NOTES - 1))] : notes;
+}
+
+// Records which chapter told the notes found in it, and when it was saved
+export function stampNotes(terms: GlossaryTerm[], chapter: string, order: number[] | null, at: number): GlossaryTerm[] {
+  const stamp = (note: TermNote): TermNote => {
+    if (note.chapter) return note;
+    const stamped: TermNote = { ...note, chapter: chapter.slice(0, MAX_NOTE_CHAPTER_LENGTH), at };
+    if (order) stamped.order = order;
+    return stamped;
+  };
+  return terms.map((t) => (t.notes ? { ...t, notes: t.notes.map(stamp) } : t));
+}
+
+// The notes of a name a reader may see in the chapter at `order`: none from
+// further on (e.g. chapters translated ahead), nor from chapters whose place is
+// not known (one read earlier cannot be told from one ahead)
+export function visibleNotes(term: GlossaryTerm, order: number[] | null): TermNote[] {
+  return (term.notes ?? []).filter((n) => !!n.order && !!order && compareOrder(n.order, order) <= 0);
 }
 
 // Identifies a term in a glossary: its original text, or for a name the user
@@ -61,6 +122,13 @@ export function promptTerms(terms: GlossaryTerm[]): GlossaryTerm[] {
   return terms
     .filter((t) => t.source)
     .map(({ source, target, kind, gender }) => (gender ? { source, target, kind, gender } : { source, target, kind }));
+}
+
+// What the model looking for a chapter's names needs: also the latest note of
+// each name, so it does not note the same again
+export function memoryTerms(terms: GlossaryTerm[]): GlossaryTerm[] {
+  const latest = new Map(terms.filter((t) => t.source && t.notes?.length).map((t) => [t.source, t.notes!.at(-1)!.text]));
+  return promptTerms(terms).map((t) => (latest.has(t.source) ? { ...t, notes: [{ text: latest.get(t.source)! }] } : t));
 }
 
 const KIND_LABELS: Record<TermKind, string> = {
@@ -121,13 +189,16 @@ export function mergeTerms(existing: GlossaryTerm[], incoming: GlossaryTerm[]): 
     if (at === undefined) {
       if (terms.length >= MAX_TERMS) continue;
       index.set(termKey(term), terms.length);
-      terms.push(term);
+      const notes = addNotes(undefined, term.notes);
+      terms.push(notes ? { ...term, notes } : term);
       changed = true;
       continue;
     }
     let current = terms[at];
     if (term.target !== current.target && isNameLike(term.target)) current = addAlias(current, term.target);
     if (!current.gender && term.gender && current.kind === "character") current = { ...current, gender: term.gender };
+    const notes = addNotes(current.notes, term.notes);
+    if (notes !== current.notes) current = { ...current, notes };
     if (current !== terms[at]) {
       terms[at] = current;
       changed = true;
@@ -166,7 +237,12 @@ export function importTerms(existing: GlossaryTerm[], imported: GlossaryTerm[]):
 // devices): every name of `newer`, then the names only `older` has
 export function unionTerms(newer: GlossaryTerm[], older: GlossaryTerm[]): GlossaryTerm[] {
   const keys = new Set(newer.map(termKey));
-  const terms = [...newer];
+  // A name both have keeps `newer`'s translation, and what both were told of it
+  const olderNotes = new Map(older.filter((t) => t.notes).map((t) => [termKey(t), t.notes]));
+  const terms = newer.map((t) => {
+    const notes = addNotes(t.notes, olderNotes.get(termKey(t)));
+    return notes === t.notes ? t : { ...t, notes };
+  });
   for (const term of older) {
     if (terms.length >= MAX_STORED_TERMS) break;
     if (!keys.has(termKey(term))) terms.push(term);

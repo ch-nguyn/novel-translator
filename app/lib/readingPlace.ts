@@ -1,4 +1,4 @@
-import { findSite } from "./sites";
+import { compareOrder, findSite } from "./sites";
 import { tocChapterNumber } from "./toc";
 
 // Where a reader is in a novel on their shelf, as two devices may each have
@@ -36,9 +36,8 @@ function compareProgress(a: ReadingPlace, b: ReadingPlace): number | null {
     const x = chapterOrder(a.url, a.chapterTitle);
     const y = chapterOrder(b.url, b.chapterTitle);
     if (!x || !y) return null;
-    for (let i = 0; i < Math.max(x.length, y.length); i++) {
-      if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0);
-    }
+    const progress = compareOrder(x, y);
+    if (progress !== 0) return progress;
   }
   return a.paragraph - b.paragraph;
 }

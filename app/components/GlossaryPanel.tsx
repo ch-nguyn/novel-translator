@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { GlossaryTerm, TERM_KINDS, TermKind } from "../lib/types";
-import { termKey } from "../lib/glossary";
+import { termKey, visibleNotes } from "../lib/glossary";
 import { Translations } from "../lib/i18n";
 import Switch from "./Switch";
 
@@ -31,6 +31,8 @@ interface Props {
   t: Translations;
   // Null while no chapter is open
   novelSlug: string | null;
+  // How far the reader is in the novel: notes from further on are not shown
+  readOrder: number[] | null;
   // The automatic glossary is on (a setting for every novel)
   enabled: boolean;
   onToggle: (enabled: boolean) => void;
@@ -57,6 +59,7 @@ export default function GlossaryPanel({
   bgColor,
   t,
   novelSlug,
+  readOrder,
   enabled,
   onToggle,
   canScan,
@@ -186,6 +189,7 @@ export default function GlossaryPanel({
           <ul className="flex flex-col">
             {shown.map((term) => {
               const key = termKey(term);
+              const note = visibleNotes(term, readOrder).at(-1);
               return (
                 <li key={key} className="border-b last:border-b-0" style={{ borderColor: textColor + "12" }}>
                   {editing === key ? (
@@ -217,6 +221,11 @@ export default function GlossaryPanel({
                             .filter(Boolean)
                             .join(" · ")}
                         </p>
+                        {note && (
+                          <p className="text-xs truncate" style={{ color: muted }}>
+                            {note.text}
+                          </p>
+                        )}
                       </div>
                       <button
                         onClick={() => setEditing(key)}

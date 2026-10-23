@@ -1,7 +1,9 @@
 import { GlossaryTerm } from "./types";
 import { makeNameFixer, unionTerms } from "./glossary";
+import { sanitizeRecaps } from "./recaps";
 import { replacesPlace } from "./readingPlace";
 import {
+  addRecaps,
   applyRemoteNovel,
   detachLibrary,
   getLibraryAccount,
@@ -10,6 +12,7 @@ import {
   getGlossary,
   getGlossarySync,
   getLibrary,
+  getRecaps,
   getSavedChapters,
   getUnsyncedGlossaries,
   LibraryEntry,
@@ -76,7 +79,13 @@ export async function pushLibrary(userId: string, keepalive = false, signal?: Ab
   for (const novel of novels) markNovelSynced(novel.slug, novel.updatedAt);
 }
 
-// Sends a novel's names, as a change to the account's version this device
+interface RemoteGlossary {
+  terms: GlossaryTerm[] | null;
+  recaps?: unknown;
+  updatedAt: number;
+}
+
+// Sends a novel's names (and chapter summaries), as a change to the account's version this device
 // last had. Returns whether the account's changed since (they must be
 // fetched and combined first).
 async function pushGlossary(userId: string, slug: string, signal?: AbortSignal): Promise<boolean> {
@@ -85,7 +94,7 @@ async function pushGlossary(userId: string, slug: string, signal?: AbortSignal):
   const res = await fetch("/api/library/glossary", {
     method: "PUT",
     headers: headers(userId, true),
-    body: JSON.stringify({ slug, terms: getGlossary(slug), updatedAt, baseUpdatedAt: syncedAt }),
+    body: JSON.stringify({ slug, terms: getGlossary(slug), recaps: getRecaps(slug), updatedAt, baseUpdatedAt: syncedAt }),
     signal,
   });
   if (!res.ok || getLibraryAccount() !== userId) return false;
@@ -116,11 +125,11 @@ export async function pushGlossaries(userId: string, signal?: AbortSignal): Prom
 // whether the names here changed.
 export async function syncGlossary(userId: string, slug: string, remoteUpdatedAt?: number, signal?: AbortSignal): Promise<boolean> {
   if (getLibraryAccount() !== userId) return false;
-  let remote: { terms: GlossaryTerm[] | null; updatedAt: number } | null = null;
+  let remote: RemoteGlossary | null = null;
   const fetchRemote = async () => {
     const res = await fetch(`/api/library/glossary?slug=${encodeURIComponent(slug)}`, { cache: "no-store", headers: headers(userId), signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return (await res.json()) as { terms: GlossaryTerm[] | null; updatedAt: number };
+    return (await res.json()) as RemoteGlossary;
   };
   if (remoteUpdatedAt === undefined) {
     remote = await fetchRemote();
@@ -131,6 +140,7 @@ export async function syncGlossary(userId: string, slug: string, remoteUpdatedAt
     remote ??= await fetchRemote();
     const { terms, updatedAt } = remote;
     if (!terms || signal?.aborted) return false;
+    const recaps = sanitizeRecaps(remote.recaps) ?? [];
     changed = await withStorageLock(() => {
       const library = getLibrary();
       // Another account signed in meanwhile, or the novel was deleted
@@ -147,6 +157,8 @@ export async function syncGlossary(userId: string, slug: string, remoteUpdatedAt
       }
       // Saved chapters write the names the new way
       rewriteNovelChapters(slug, makeNameFixer(next));
+      // Recaps only ever add up: the ones here not sent yet go with the names
+      addRecaps(slug, recaps, true);
       return JSON.stringify(next) !== JSON.stringify(local);
     });
   }

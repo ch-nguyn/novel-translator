@@ -92,6 +92,25 @@ function numbersIn(match: RegExpMatchArray | null): number[] | null {
   return numbers?.every(Number.isSafeInteger) ? numbers : null;
 }
 
+// Above 0 when chapter order `x` (see chapterOrder) comes after `y`, below
+// when before, 0 for the same chapter
+export function compareOrder(x: number[], y: number[]): number {
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) - (y[i] ?? 0);
+  }
+  return 0;
+}
+
+// Things the chapters of a novel told (notes, summaries), earlier chapters
+// first: by their place in the novel when every one's is known, else all by
+// when their chapters were saved (one rule for all, so the order is consistent)
+export function sortByChapter<T extends { order?: number[]; at?: number }>(items: T[]): T[] {
+  const byPlace = items.every((item) => item.order);
+  return [...items].sort((a, b) =>
+    byPlace ? compareOrder(a.order!, b.order!) || (a.at ?? 0) - (b.at ?? 0) : (a.at ?? Infinity) - (b.at ?? Infinity)
+  );
+}
+
 function parseWebUrl(url: string): URL | null {
   try {
     const parsed = new URL(url);

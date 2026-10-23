@@ -2,7 +2,8 @@ import { pool } from "./db";
 import { extractNovelSlug } from "../storage";
 import { findSite } from "../sites";
 import { sanitizeTerms } from "../glossary";
-import { GlossaryTerm } from "../types";
+import { ChapterRecap, GlossaryTerm } from "../types";
+import { sanitizeRecaps, unionRecaps } from "../recaps";
 import { LIBRARY_USER_HEADER } from "../librarySync";
 import { replacesPlace } from "../readingPlace";
 
@@ -188,32 +189,58 @@ export async function putNovels(userId: string, novels: ShelfNovel[]): Promise<b
 }
 
 // null when the account has no names for the novel
-export async function getGlossary(userId: string, slug: string): Promise<{ terms: GlossaryTerm[]; updatedAt: number } | null> {
-  const { rows } = await pool.query(`select "terms", "updated_at" from "library_glossary" where "user_id" = $1 and "slug" = $2`, [userId, slug]);
+export async function getGlossary(
+  userId: string,
+  slug: string
+): Promise<{ terms: GlossaryTerm[]; recaps: ChapterRecap[]; updatedAt: number } | null> {
+  const { rows } = await pool.query(`select "terms", "recaps", "updated_at" from "library_glossary" where "user_id" = $1 and "slug" = $2`, [userId, slug]);
   if (rows.length === 0) return null;
-  return { terms: sanitizeTerms(rows[0].terms) ?? [], updatedAt: Number(rows[0].updated_at) };
+  return { terms: sanitizeTerms(rows[0].terms) ?? [], recaps: sanitizeRecaps(rows[0].recaps) ?? [], updatedAt: Number(rows[0].updated_at) };
 }
 
 // Keeps a novel's names if the stored ones are still those of `baseUpdatedAt`
 // (what the device last had; 0 for none), so names added on another device
-// meanwhile are not overwritten. Only for a novel on the shelf.
+// meanwhile are not overwritten. Only for a novel on the shelf. Recaps only
+// add up: those sent join the stored ones (a device may lack some it could
+// not store); none are sent by an app older than them.
 // "conflict": the stored names changed meanwhile; "absent": no such novel.
 export async function putGlossary(
   userId: string,
   slug: string,
   terms: GlossaryTerm[],
+  recaps: ChapterRecap[] | null,
   updatedAt: number,
   baseUpdatedAt: number
 ): Promise<"saved" | "conflict" | "absent"> {
-  const { rowCount } = await pool.query(
-    `insert into "library_glossary" ("user_id", "slug", "terms", "updated_at")
-     select $1, $2, $3, $4
-     where exists (select 1 from "library_novel" where "user_id" = $1 and "slug" = $2 and not "removed")
-     on conflict ("user_id", "slug") do update set "terms" = excluded."terms", "updated_at" = excluded."updated_at"
-     where "library_glossary"."updated_at" = $5 and "library_glossary"."updated_at" < excluded."updated_at"`,
-    [userId, slug, JSON.stringify(terms), updatedAt, baseUpdatedAt]
-  );
-  if ((rowCount ?? 0) > 0) return "saved";
-  const { rows } = await pool.query(`select 1 from "library_novel" where "user_id" = $1 and "slug" = $2 and not "removed"`, [userId, slug]);
-  return rows.length > 0 ? "conflict" : "absent";
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    // The stored recaps, locked until they are written back with those sent
+    const { rows: stored } = await client.query(
+      `select "recaps" from "library_glossary" where "user_id" = $1 and "slug" = $2 for update`,
+      [userId, slug]
+    );
+    const kept = sanitizeRecaps(stored[0]?.recaps) ?? [];
+    const combined = recaps ? unionRecaps(kept, recaps) : kept;
+    const { rowCount } = await client.query(
+      `insert into "library_glossary" ("user_id", "slug", "terms", "updated_at", "recaps")
+       select $1, $2, $3, $4, $6
+       where exists (select 1 from "library_novel" where "user_id" = $1 and "slug" = $2 and not "removed")
+       on conflict ("user_id", "slug") do update set "terms" = excluded."terms", "updated_at" = excluded."updated_at", "recaps" = excluded."recaps"
+       where "library_glossary"."updated_at" = $5 and "library_glossary"."updated_at" < excluded."updated_at"`,
+      [userId, slug, JSON.stringify(terms), updatedAt, baseUpdatedAt, JSON.stringify(combined)]
+    );
+    const { rows } =
+      (rowCount ?? 0) > 0
+        ? { rows: [] }
+        : await client.query(`select 1 from "library_novel" where "user_id" = $1 and "slug" = $2 and not "removed"`, [userId, slug]);
+    await client.query("commit");
+    if ((rowCount ?? 0) > 0) return "saved";
+    return rows.length > 0 ? "conflict" : "absent";
+  } catch (e) {
+    await client.query("rollback").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }

@@ -1,4 +1,5 @@
-import { AI_VOICES, DEFAULT_AI_MODEL, DEFAULT_AI_VOICE, GlossaryTerm, SavedChapter, ReaderSettings, SPEECH_RATES } from "./types";
+import { AI_VOICES, ChapterRecap, DEFAULT_AI_MODEL, DEFAULT_AI_VOICE, GlossaryTerm, SavedChapter, ReaderSettings, SPEECH_RATES } from "./types";
+import { MAX_RECAPS, sanitizeRecaps, unionRecaps } from "./recaps";
 import { findSite } from "./sites";
 import { MAX_STORED_TERMS, sanitizeTerms } from "./glossary";
 
@@ -32,6 +33,8 @@ const SHELF_DEVICE_KEY = "novel-translator-shelf-device";
 const NOVEL_UPDATES_KEY = "novel-translator-novel-updates";
 // One key per novel: `${GLOSSARY_KEY_PREFIX}${novelSlug}`
 const GLOSSARY_KEY_PREFIX = "novel-translator-glossary:";
+// A novel's chapter summaries (app/lib/recaps.ts), synced with its glossary
+const RECAPS_KEY_PREFIX = "novel-translator-recaps:";
 const PENDING_WINDOW_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const MAX_SCROLL_POSITIONS = 300;
 export const MAX_CHAPTERS_PER_NOVEL = 50;
@@ -145,10 +148,11 @@ function removeOrphanGlossaries(chapters: SavedChapter[], keepSlug: string): boo
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (key?.startsWith(GLOSSARY_KEY_PREFIX) && !slugs.has(key.slice(GLOSSARY_KEY_PREFIX.length))) orphans.push(key);
+    if (key?.startsWith(RECAPS_KEY_PREFIX) && !slugs.has(key.slice(RECAPS_KEY_PREFIX.length))) orphans.push(key);
   }
   for (const key of orphans) {
     localStorage.removeItem(key);
-    forgetGlossarySync(key.slice(GLOSSARY_KEY_PREFIX.length));
+    if (key.startsWith(GLOSSARY_KEY_PREFIX)) forgetGlossarySync(key.slice(GLOSSARY_KEY_PREFIX.length));
   }
   return orphans.length > 0;
 }
@@ -205,7 +209,7 @@ function limitNovelChapters(chapters: SavedChapter[], novelSlug: string): SavedC
 
 // Storage keys whose change (in another tab) affects the open novel's names
 export function isGlossaryStorageKey(key: string | null): boolean {
-  return key === null || key === STORAGE_KEY || key.startsWith(GLOSSARY_KEY_PREFIX);
+  return key === null || key === STORAGE_KEY || key.startsWith(GLOSSARY_KEY_PREFIX) || key.startsWith(RECAPS_KEY_PREFIX);
 }
 
 // Rewrites the text of a novel's saved chapters (e.g. after a name was corrected)
@@ -246,6 +250,7 @@ function removeNovelData(novelSlug: string) {
   cleared.add(novelSlug);
   localStorage.setItem(CLEARED_NOVELS_KEY, JSON.stringify([...cleared]));
   localStorage.removeItem(GLOSSARY_KEY_PREFIX + novelSlug);
+  localStorage.removeItem(RECAPS_KEY_PREFIX + novelSlug);
   forgetGlossarySync(novelSlug);
   const { [novelSlug]: _update, ...updates } = getNovelUpdates();
   localStorage.setItem(NOVEL_UPDATES_KEY, JSON.stringify(updates));
@@ -509,10 +514,14 @@ export function detachLibrary() {
   }
   saveLibrary(library);
   const syncs: Record<string, GlossarySync> = {};
+  // What the other account read is theirs: not kept for this one
+  const recaps: string[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (key?.startsWith(GLOSSARY_KEY_PREFIX)) syncs[key.slice(GLOSSARY_KEY_PREFIX.length)] = { updatedAt: 0, syncedAt: 0 };
+    if (key?.startsWith(RECAPS_KEY_PREFIX)) recaps.push(key);
   }
+  for (const key of recaps) localStorage.removeItem(key);
   try {
     localStorage.setItem(GLOSSARY_SYNC_KEY, JSON.stringify(syncs));
   } catch {
@@ -818,12 +827,7 @@ function forgetGlossarySync(novelSlug: string) {
 // made here, to be sent to the account.
 export function saveGlossary(novelSlug: string, terms: GlossaryTerm[], sync?: GlossarySync): number {
   const key = GLOSSARY_KEY_PREFIX + novelSlug;
-  const stamp = () => {
-    if (sync) return setGlossarySync(novelSlug, sync);
-    const previous = getGlossarySync(novelSlug);
-    setGlossarySync(novelSlug, { updatedAt: Math.max(Date.now(), previous.updatedAt + 1), syncedAt: previous.syncedAt });
-    notifyLocalChange();
-  };
+  const stamp = () => (sync ? setGlossarySync(novelSlug, sync) : markGlossaryChanged(novelSlug));
   if (terms.length === 0) {
     const had = localStorage.getItem(key) !== null;
     localStorage.removeItem(key);
@@ -852,6 +856,40 @@ export function saveGlossary(novelSlug: string, terms: GlossaryTerm[], sync?: Gl
       evicted++;
     }
   }
+}
+
+// The novel's names or recaps changed here: to be sent to the account
+function markGlossaryChanged(novelSlug: string) {
+  const previous = getGlossarySync(novelSlug);
+  setGlossarySync(novelSlug, { updatedAt: Math.max(Date.now(), previous.updatedAt + 1), syncedAt: previous.syncedAt });
+  notifyLocalChange();
+}
+
+// A novel's chapter summaries, earliest first (see app/lib/recaps.ts)
+export function getRecaps(novelSlug: string): ChapterRecap[] {
+  try {
+    const stored = JSON.parse(localStorage.getItem(RECAPS_KEY_PREFIX + novelSlug) || "[]");
+    return sanitizeRecaps(Array.isArray(stored) ? stored.slice(-MAX_RECAPS) : []) ?? [];
+  } catch {
+    return [];
+  }
+}
+
+// Adds recaps to a novel's: made here (sent to the account with its names),
+// or from the account (`fromAccount`). Skipped when browser storage is full:
+// chapters and names matter more (the account keeps every device's, see
+// putGlossary). Call while holding the storage lock.
+export function addRecaps(novelSlug: string, recaps: ChapterRecap[], fromAccount = false) {
+  if (recaps.length === 0) return;
+  const known = getRecaps(novelSlug);
+  const next = unionRecaps(known, recaps);
+  if (JSON.stringify(next) === JSON.stringify(known)) return;
+  try {
+    localStorage.setItem(RECAPS_KEY_PREFIX + novelSlug, JSON.stringify(next));
+  } catch {
+    return;
+  }
+  if (!fromAccount) markGlossaryChanged(novelSlug);
 }
 
 // A novel's chapter count on its site when last checked, and when the reader

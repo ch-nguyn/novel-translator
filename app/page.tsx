@@ -31,6 +31,7 @@ import {
   NovelUpdate,
   MAX_CHAPTERS_PER_NOVEL,
   getLibrary,
+  getRecaps,
   Library,
   isLibraryStorageKey,
   onLocalLibraryChange,
@@ -39,7 +40,10 @@ import {
 import { LibrarySyncResult, pushGlossaries, pushLibrary, syncGlossary, syncLibrary } from "./lib/librarySync";
 import { checkNovelUpdates } from "./lib/toc";
 import { PLAN_OPEN } from "./lib/plan";
-import { applyNames, editTerm, renameTerm, termKey } from "./lib/glossary";
+import { applyNames, editTerm, renameTerm, termKey, visibleNotes } from "./lib/glossary";
+import { chapterOrder } from "./lib/readingPlace";
+import { recapsBefore } from "./lib/recaps";
+import { NameCard, RecapCard } from "./components/StoryMemory";
 import { exportGlossary, importGlossary, scanSavedChapters, SCAN_CHAPTERS, updateGlossary } from "./lib/glossaryActions";
 import { ChapterMeta, fetchChapterContent, fetchFirstChapterUrl, translateChapterDirect } from "./lib/api";
 import { bookPageUrl, normalizeEnteredUrl } from "./lib/sites";
@@ -108,12 +112,36 @@ const MAX_CHECKED_NOVELS = 20;
 const JOB_POLL_INTERVAL_MS = 15_000;
 // …for at most this long after a job was started (or found running)…
 const JOB_POLL_MAX_MS = 10 * 60 * 1000;
+// A reader coming back to a novel after this long is reminded of the last chapters…
+const RECAP_AFTER_MS = 2 * 24 * 60 * 60 * 1000;
+// …this many
+const RECAP_CHAPTERS = 3;
 // …and at least this long, while the job's first chapter may not be on the server yet
 const JOB_POLL_GRACE_MS = 45_000;
 // Stopped once this many polls in a row find nothing translating (one may land
 // between two chapters, before the job has written the next)
 const JOB_POLL_IDLE_POLLS = 2;
 type SettingsTab = "ai" | "speech" | "general" | "account" | "contact";
+
+// Text selected in the chapter, and where it is on screen
+interface SelectedText {
+  text: string;
+  top: number;
+  bottom: number;
+  center: number;
+}
+
+// Where what is offered for a selected name goes: under it, or above when
+// there is no room below; within the screen. With its card when the glossary has the name.
+function nameCardPosition(selected: SelectedText, withCard: boolean): React.CSSProperties {
+  const width = withCard ? Math.min(288, window.innerWidth - 16) : 140;
+  const left = Math.min(Math.max(selected.center - width / 2, 8), window.innerWidth - width - 8);
+  const height = withCard ? 260 : 44;
+  const below = selected.bottom + 10 + height <= window.innerHeight;
+  return below
+    ? { top: selected.bottom + 10, left, width }
+    : { bottom: window.innerHeight - selected.top + 10, left, width };
+}
 
 function HeaderButton({
   label,
@@ -168,6 +196,10 @@ export default function Home() {
   const [url, setUrl] = useState("");
   // The chapter shown (or being opened); empty when none is
   const [openUrl, setOpenUrl] = useState("");
+  // The chapter shown with a reminder of the ones before (RECAP_AFTER_MS)
+  const [recapUrl, setRecapUrl] = useState<string | null>(null);
+  // Novels already opened since the app was: a reminder is offered once
+  const recapCheckedRef = useRef(new Set<string>());
   // For async work that finishes later: the chapter shown by then
   const openUrlRef = useRef("");
   openUrlRef.current = openUrl;
@@ -217,7 +249,7 @@ export default function Home() {
   // Bumped when the glossary changes without a chapter being saved
   const [glossaryVersion, setGlossaryVersion] = useState(0);
   // A name selected in the chapter, offered for renaming, and the one being renamed
-  const [selectedName, setSelectedName] = useState<{ text: string; top: number; left: number } | null>(null);
+  const [selectedName, setSelectedName] = useState<SelectedText | null>(null);
   const [renameFrom, setRenameFrom] = useState<string | null>(null);
   const [scan, setScan] = useState<{ done: number; total: number } | null>(null);
   const [glossaryMessage, setGlossaryMessage] = useState<string | null>(null);
@@ -270,6 +302,19 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [currentNovelSlug, savedChapters, glossaryVersion]
   );
+  // The open chapter's place in the novel: notes and summaries from further on are not shown
+  const readOrder = useMemo(() => (openUrl ? chapterOrder(openUrl, chapterName || title) : null), [openUrl, chapterName, title]);
+  const recaps = useMemo(
+    () => (recapUrl && recapUrl === openUrl ? recapsBefore(getRecaps(extractNovelSlug(recapUrl)), recapUrl, readOrder, RECAP_CHAPTERS) : []),
+    // Recaps come with a saved chapter or the account's names
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [recapUrl, openUrl, readOrder, savedChapters, glossaryVersion]
+  );
+  // How far the reader is in the novel whose names are listed: as far as they got on any device
+  const shelfPlace = currentNovelSlug ? library[currentNovelSlug] : undefined;
+  const glossaryReadOrder = shelfPlace && !shelfPlace.removed ? chapterOrder(shelfPlace.url, shelfPlace.chapterTitle) : readOrder;
+  // The name selected in the chapter, if the glossary has it
+  const selectedTerm = selectedName ? glossary.find((term) => term.target === selectedName.text || term.aliases?.includes(selectedName.text)) : undefined;
   // Names first found in the open chapter
 
   useEffect(() => {
@@ -283,6 +328,7 @@ export default function Home() {
     if (currentUrl) {
       const chapter = getSavedChapters().find((c) => c.url === currentUrl);
       if (chapter) {
+        considerRecap(chapter.url);
         // Not recorded as reading it again: the account may know a later place
         setUrl(chapter.url);
         setOpenUrl(chapter.url);
@@ -360,6 +406,18 @@ export default function Home() {
     };
     document.addEventListener("visibilitychange", handleVisible);
     return () => document.removeEventListener("visibilitychange", handleVisible);
+  }, []);
+
+  // The app left open in the background for a long while: the reader is
+  // reminded of the chapters before the one open too
+  useEffect(() => {
+    let hiddenAt = 0;
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") hiddenAt = Date.now();
+      else if (hiddenAt && Date.now() - hiddenAt >= RECAP_AFTER_MS && openUrlRef.current) setRecapUrl(openUrlRef.current);
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
   // Brings in the chapters the server translates ahead while the reader reads
@@ -586,8 +644,7 @@ export default function Home() {
       const text = selection.toString().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
       if (!text || text.length > 60 || /\n/.test(text)) return setSelectedName(null);
       const rect = selection.getRangeAt(0).getBoundingClientRect();
-      const left = Math.min(Math.max(rect.left + rect.width / 2, 70), window.innerWidth - 70);
-      setSelectedName({ text, top: rect.bottom + 10, left });
+      setSelectedName({ text, top: rect.top, bottom: rect.bottom, center: rect.left + rect.width / 2 });
     };
     document.addEventListener("selectionchange", update);
     window.addEventListener("scroll", update, { passive: true });
@@ -609,6 +666,18 @@ export default function Home() {
     setCurrentUrl(chapterUrl, chapter && { novelName: chapter.novelName, chapterTitle: chapter.title });
     setNovelUpdates(getNovelUpdates());
     setLibrary(getLibrary());
+  }
+
+  // A chapter is opened: a reader coming back to its novel after a while (on
+  // any device) is reminded of the chapters before. Before the chapter is
+  // recorded as read.
+  function considerRecap(chapterUrl: string) {
+    setRecapUrl(null);
+    const slug = extractNovelSlug(chapterUrl);
+    if (recapCheckedRef.current.has(slug)) return;
+    recapCheckedRef.current.add(slug);
+    const entry = getLibrary()[slug];
+    if (entry && !entry.removed && Date.now() - entry.updatedAt >= RECAP_AFTER_MS) setRecapUrl(chapterUrl);
   }
 
   // Where the reader is in the chapter on screen: the paragraph at the top
@@ -634,6 +703,12 @@ export default function Home() {
 
   // Shows what the account brought from other devices
   function applyLibrarySync({ changed, removed, glossaries }: LibrarySyncResult) {
+    // Read lately on another device: no reminder needed
+    const recent = (slug: string) => {
+      const entry = getLibrary()[slug];
+      return !!entry && Date.now() - entry.updatedAt < RECAP_AFTER_MS;
+    };
+    setRecapUrl((shown) => (shown && changed.includes(extractNovelSlug(shown)) && recent(extractNovelSlug(shown)) ? null : shown));
     for (const slug of removed) forgetNovel(slug);
     for (const slug of glossaries) showGlossaryNames(slug);
     if (glossaries.length > 0) setGlossaryVersion((v) => v + 1);
@@ -792,6 +867,7 @@ export default function Home() {
     runsRef.current.set(fetchUrl, controller);
     const isShown = () => abortRef.current === controller && !controller.signal.aborted;
 
+    considerRecap(fetchUrl);
     setFetching(true);
     setNotice(null);
     setSimplifiedText("");
@@ -970,6 +1046,7 @@ export default function Home() {
   }
 
   async function loadSavedChapter(chapter: SavedChapter) {
+    considerRecap(chapter.url);
     lookupRef.current?.abort();
     // A chapter being translated on screen goes on off screen (and is saved)
     abortRef.current = null;
@@ -1519,6 +1596,8 @@ export default function Home() {
 
             <NavButtons prevUrl={prevUrl} nextUrl={nextUrl} canNavigate={canNavigate} textColor={textColor} prevLabel={t.previous} nextLabel={t.next} onNavigate={openChapterLink} />
 
+            {recaps.length > 0 && <RecapCard recaps={recaps} t={t} textColor={textColor} onClose={() => setRecapUrl(null)} />}
+
             <div
               ref={textRef}
               className="min-h-[60vh] px-1 sm:px-2 py-4 whitespace-pre-wrap"
@@ -1604,18 +1683,25 @@ export default function Home() {
         />
       )}
       {settings.autoGlossary && selectedName && !isLoading && overlay === "none" && !renameFrom && currentNovelSlug && (
-        <button
+        <div
           // Keeps the selection while pressing
           onPointerDown={(e) => e.preventDefault()}
-          onClick={() => {
-            setRenameFrom(selectedName.text);
-            document.getSelection()?.removeAllRanges();
-          }}
-          className="fixed z-30 -translate-x-1/2 px-3 py-1.5 rounded-full shadow-lg text-sm font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
-          style={{ top: selectedName.top, left: selectedName.left }}
+          className="fixed z-30 flex flex-col items-center gap-2"
+          style={nameCardPosition(selectedName, !!selectedTerm)}
         >
-          ✎ {t.renameName}
-        </button>
+          {selectedTerm && (
+            <NameCard term={selectedTerm} notes={visibleNotes(selectedTerm, readOrder)} t={t} bgColor={settings.bgColor} textColor={textColor} />
+          )}
+          <button
+            onClick={() => {
+              setRenameFrom(selectedName.text);
+              document.getSelection()?.removeAllRanges();
+            }}
+            className="px-3 py-1.5 rounded-full shadow-lg text-sm font-medium cursor-pointer text-white bg-blue-600 hover:bg-blue-700"
+          >
+            ✎ {t.renameName}
+          </button>
+        </div>
       )}
 
       {renameFrom && (
@@ -1710,6 +1796,7 @@ export default function Home() {
                 bgColor={settings.bgColor}
                 t={t}
                 novelSlug={nothingOpen ? null : currentNovelSlug}
+                readOrder={glossaryReadOrder}
                 enabled={settings.autoGlossary}
                 onToggle={(autoGlossary) => updateSettings({ autoGlossary })}
                 canScan={hasApiKey && currentNovelChapters.length > 0}
