@@ -1,6 +1,7 @@
 import { AI_VOICES, ChapterRecap, DEFAULT_AI_MODEL, DEFAULT_AI_VOICE, GlossaryTerm, SavedChapter, ReaderSettings, SPEECH_RATES } from "./types";
 import { MAX_RECAPS, sanitizeRecaps, unionRecaps } from "./recaps";
 import { findSite } from "./sites";
+import { digitChapterNumber } from "./chapterTitle";
 import { MAX_STORED_TERMS, sanitizeTerms } from "./glossary";
 
 const STORAGE_KEY = "novel-translator-chapters";
@@ -88,6 +89,8 @@ export function getSavedChapters(): SavedChapter[] {
     );
     return chapters.map((c) => ({
       ...c,
+      // Saved before chapter numbers were always in digits
+      title: typeof c.title === "string" ? digitChapterNumber(c.title) : c.title,
       novelName: c.novelName || "",
       novelSlug: c.novelSlug || extractNovelSlug(c.url),
       prevUrl: c.prevUrl ?? null,
@@ -324,7 +327,12 @@ export function getLibrary(): Library {
     const stored = localStorage.getItem(LIBRARY_KEY);
     if (stored === null) return migrateLibrary();
     const library = JSON.parse(stored);
-    return library && typeof library === "object" && !Array.isArray(library) ? library : {};
+    if (!library || typeof library !== "object" || Array.isArray(library)) return {};
+    // Saved (or sent by another device) before chapter numbers were always in digits
+    for (const entry of Object.values(library) as LibraryEntry[]) {
+      if (typeof entry?.chapterTitle === "string") entry.chapterTitle = digitChapterNumber(entry.chapterTitle);
+    }
+    return library;
   } catch {
     return {};
   }

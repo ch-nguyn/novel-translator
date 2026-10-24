@@ -114,7 +114,7 @@ export function getTextColor(bgColor: string): string {
 // Chapters translated ahead in the background, on top of the one being opened
 export const PREFETCH_CHAPTERS = 3;
 
-export const ZH_TITLE_PROMPT = "Dịch tiêu đề truyện sau từ tiếng Trung sang tiếng Việt (ưu tiên Hán Việt) phổ thông dễ hiểu. KHÔNG được để lại bất kỳ chữ Trung Quốc nào. Giữ nguyên dấu '-' phân cách giữa tên truyện và tên chương. Chỉ trả về bản dịch, không giải thích.";
+export const ZH_TITLE_PROMPT = "Dịch tiêu đề truyện sau từ tiếng Trung sang tiếng Việt (ưu tiên Hán Việt) phổ thông dễ hiểu. KHÔNG được để lại bất kỳ chữ Trung Quốc nào. Giữ nguyên dấu '-' phân cách giữa tên truyện và tên chương. Số chương phải viết bằng chữ số (VD: 第2084章 → Chương 2084), không viết bằng chữ. Chỉ trả về bản dịch, không giải thích.";
 
 export interface TranslatedChapter {
   text: string;

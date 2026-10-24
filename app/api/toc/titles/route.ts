@@ -1,3 +1,4 @@
+import { digitChapterNumber, tocChapterNumber } from "../../../lib/chapterTitle";
 import { hasChinese } from "../../../lib/search";
 import { cachedTranslations } from "../../../lib/server/cachedTranslations";
 import { helperAi } from "../../../lib/server/helperAi";
@@ -32,5 +33,7 @@ export async function POST(req: Request) {
     perCall: 25,
     task: "toc-titles",
   });
-  return Response.json({ titles: Object.fromEntries(found) });
+  // In digits even when the AI spelled the number out (or did before, in the cache)
+  const titled = [...found].map(([title, translated]) => [title, digitChapterNumber(translated, tocChapterNumber(title))]);
+  return Response.json({ titles: Object.fromEntries(titled) });
 }

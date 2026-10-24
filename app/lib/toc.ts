@@ -1,5 +1,6 @@
 import { readError } from "./errors";
 import { extractNovelSlug, getNovelUpdates, recordNovelToc } from "./storage";
+import { parseChineseNumber } from "./chapterTitle";
 
 // A novel's table of contents: every chapter its site lists, in reading
 // order (see app/api/toc). Only titles and links, so it costs no translation.
@@ -40,40 +41,6 @@ export async function fetchNovelToc(url: string, { signal, fresh = false }: { si
   const toc: NovelToc = await res.json();
   cache.set(slug, { toc, at: Date.now() });
   return toc;
-}
-
-const DIGITS: Record<string, number> = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
-const UNITS: Record<string, number> = { 十: 10, 拾: 10, 百: 100, 佰: 100, 千: 1000, 仟: 1000 };
-
-// 五百二十三 → 523, 一零二 → 102, 十二 → 12
-export function parseChineseNumber(text: string): number | null {
-  if (/^\d+$/.test(text)) return parseInt(text, 10);
-  if (![...text].every((c) => c in DIGITS || c in UNITS || c === "万" || c === "萬")) return null;
-  // Written digit by digit, without units
-  if (![...text].some((c) => c in UNITS || c === "万" || c === "萬")) {
-    return parseInt([...text].map((c) => DIGITS[c]).join(""), 10);
-  }
-  let total = 0;
-  let section = 0;
-  let digit = 0;
-  for (const c of text) {
-    if (c in DIGITS) digit = DIGITS[c];
-    else if (c in UNITS) {
-      section += (digit || 1) * UNITS[c];
-      digit = 0;
-    } else {
-      total += (section + digit) * 10000;
-      section = 0;
-      digit = 0;
-    }
-  }
-  return total + section + digit;
-}
-
-// The chapter number in a site's title: 第五百二十三章 剑出 → 523, 第12章 → 12
-export function tocChapterNumber(title: string): number | null {
-  const match = title.match(/第\s*([0-9零〇一二两兩三四五六七八九十拾百佰千仟万萬]+)\s*[章节節回话話]/);
-  return match ? parseChineseNumber(match[1]) : null;
 }
 
 // The site's title with its chapter number in Vietnamese: 第五百二十三章 剑出 →

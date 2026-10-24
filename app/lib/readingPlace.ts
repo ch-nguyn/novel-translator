@@ -1,5 +1,5 @@
 import { compareOrder, findSite } from "./sites";
-import { tocChapterNumber } from "./toc";
+import { digitChapterNumber, tocChapterNumber } from "./chapterTitle";
 
 // Where a reader is in a novel on their shelf, as two devices may each have
 // it (app/lib/librarySync.ts, app/lib/server/library.ts). Shared by the
@@ -25,7 +25,7 @@ export function chapterOrder(url: string, chapterTitle: string): number[] | null
     return null;
   }
   // 第一百二十章 …, or as translated: Chương 120: …
-  const number = tocChapterNumber(chapterTitle) ?? Number(chapterTitle.match(/^\s*Chương\s+(\d+)\b/i)?.[1] ?? NaN);
+  const number = tocChapterNumber(chapterTitle) ?? Number(digitChapterNumber(chapterTitle).match(/^\s*Chương\s+(\d+)\b/i)?.[1] ?? NaN);
   return Number.isSafeInteger(number) ? [number] : null;
 }
 

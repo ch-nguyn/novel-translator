@@ -4,7 +4,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { SavedChapter } from "../lib/types";
 import { Translations } from "../lib/i18n";
 import { extractNovelSlug, getNovelUpdates, recordNovelToc } from "../lib/storage";
-import { fetchNovelToc, NovelToc, readableTocTitle, tocChapterNumber, translateTocTitles } from "../lib/toc";
+import { fetchNovelToc, NovelToc, readableTocTitle, translateTocTitles } from "../lib/toc";
+import { tocChapterNumber } from "../lib/chapterTitle";
 import { describeError, ErrorCode, errorText } from "../lib/errors";
 
 // Chapters shown at once; a long novel is picked by range
