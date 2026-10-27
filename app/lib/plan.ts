@@ -1,6 +1,6 @@
 // The monthly plan: translating on the app's AI with no key and no limit
 
-export const PLAN_PRICE_VND = 49_000;
+export const PLAN_PRICE_VND = 24_000;
 export const PLAN_DAYS = 30;
 // Whether the app offers the plan. Closed: nothing in the app tells of it or
 // takes payment; accounts that already paid keep translating on it until it

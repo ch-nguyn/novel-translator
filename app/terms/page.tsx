@@ -5,7 +5,7 @@ export const metadata: Metadata = { title: "Điều khoản sử dụng" };
 
 export default function TermsPage() {
   return (
-    <LegalPage title="Điều khoản sử dụng" updated="19/10/2026">
+    <LegalPage title="Điều khoản sử dụng" updated="27/10/2026">
       <p className="mt-6">Khi dùng Dịch Truyện Trung, bạn đồng ý với các điều khoản dưới đây.</p>
 
       <h2>Ứng dụng làm gì</h2>
@@ -23,14 +23,14 @@ export default function TermsPage() {
 
       <h2>Tài khoản và gói tháng</h2>
       <p>
-        Đăng nhập là không bắt buộc. Tài khoản đã đăng nhập có thể mua gói tháng: 49.000đ cho 30 ngày, dịch bằng AI của ứng dụng
+        Đăng nhập là không bắt buộc. Tài khoản đã đăng nhập có thể mua gói tháng: 24.000đ cho 30 ngày, dịch bằng AI của ứng dụng
         mà không cần API key và không giới hạn số chương, cho việc đọc cá nhân.
       </p>
       <ul>
         <li>Thanh toán bằng chuyển khoản ngân hàng với đúng nội dung chuyển khoản ứng dụng đưa ra; gói tự kích hoạt khi tiền về.</li>
         <li>Gói gồm việc dịch chương và tự động ghi nhớ tên riêng. Nghe truyện bằng giọng AI không thuộc gói và vẫn dùng OpenAI API key của bạn; giọng của máy vẫn miễn phí.</li>
         <li>Mỗi tài khoản dịch tối đa 4 chương cùng lúc.</li>
-        <li>Mỗi 49.000đ trong một lần chuyển được cộng thêm 30 ngày. Gói không tự gia hạn.</li>
+        <li>Mỗi 24.000đ trong một lần chuyển được cộng thêm 30 ngày. Gói không tự gia hạn.</li>
         <li>Chuyển sai nội dung hoặc thiếu tiền thì gói chưa kích hoạt; liên hệ qua mục Liên hệ để được xử lý.</li>
         <li>Gói dành cho một người dùng; chia sẻ tài khoản, dùng tự động hoặc gây quá tải có thể khiến tài khoản bị khóa.</li>
       </ul>
