@@ -10,7 +10,7 @@ import { ApiError } from "./apiError";
 // The router key never leaves the server.
 
 // The only model run on the app's key
-export const SYSTEM_AI_MODEL = "gpt-5.6-luna";
+export const SYSTEM_AI_MODEL = "gpt-6-luna";
 
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 

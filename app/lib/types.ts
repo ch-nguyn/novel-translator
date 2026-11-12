@@ -20,17 +20,17 @@ export interface AIModelOption {
   models: string[];
 }
 
-export const DEFAULT_AI_MODEL = "gpt-5.6-luna";
+export const DEFAULT_AI_MODEL = "gpt-6-luna";
 
 export const AI_MODEL_OPTIONS: AIModelOption[] = [
   {
     provider: "openai",
     label: "OpenAI",
     models: [
-      "gpt-5.6-luna",
-      "gpt-5.6-sol",
       "gpt-6-luna",
       "gpt-6.1-sol",
+      "gpt-5.6-luna",
+      "gpt-5.6-sol",
     ],
   },
 ];
