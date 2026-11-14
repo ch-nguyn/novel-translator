@@ -10,6 +10,10 @@ export const PLAN_OPEN = true;
 // What the server says about the signed-in user's plan (GET /api/subscription)
 export interface SubscriptionStatus {
   active: boolean;
+  // Translates on the app's AI for free, given by the admin (or is the admin)
+  free: boolean;
+  // May give free use to others (the Account tab's admin section)
+  admin: boolean;
   // Milliseconds; null when never paid
   paidUntil: number | null;
   // How to pay; null when payments are not set up

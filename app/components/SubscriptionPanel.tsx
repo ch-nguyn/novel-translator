@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Translations } from "../lib/i18n";
 import { PLAN_DAYS, PLAN_OPEN, PLAN_PRICE_VND, SubscriptionStatus } from "../lib/plan";
+import AdminPanel from "./AdminPanel";
 
 interface Props {
   textColor: string;
@@ -45,8 +46,8 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
     loadStatus(controller.signal).then(
       (loaded) => {
         setStatus(loaded);
-        // Paid while the details were closed: the app may still ask for a key
-        if (loaded.active) onPaidRef.current();
+        // Paid (or given free use) while the details were closed: the app may still ask for a key
+        if (loaded.active || loaded.free) onPaidRef.current();
       },
       () => !controller.signal.aborted && setFailed(true)
     );
@@ -62,6 +63,13 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
       loadStatus(controller.signal)
         .then((next) => {
           setCheckFailed(false);
+          // Given free use by the admin meanwhile: nothing left to pay
+          if (next.free) {
+            setStatus(next);
+            setPaying(false);
+            onPaidRef.current();
+            return;
+          }
           if ((next.paidUntil ?? 0) <= (paidUntil ?? 0)) return;
           setStatus(next);
           setPaying(false);
@@ -77,6 +85,20 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
       controller.abort();
     };
   }, [paying, paidUntil]);
+
+  const admin = status?.admin ? <AdminPanel textColor={textColor} t={t} lang={lang} /> : null;
+
+  // Free use, given by the admin: nothing to pay
+  if (status?.free) {
+    return (
+      <>
+        <section className="flex flex-col gap-2 p-4 rounded-xl border" style={{ borderColor: textColor + "25" }} aria-label={t.planName}>
+          <p className="text-sm font-medium text-green-600">{t.freeAccessActive}</p>
+        </section>
+        {admin}
+      </>
+    );
+  }
 
   // Plan closed: only an account still on it sees until when
   if (!PLAN_OPEN && !status?.active) return null;

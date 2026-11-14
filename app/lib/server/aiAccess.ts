@@ -2,11 +2,12 @@ import { DEFAULT_AI_MODEL } from "../types";
 import { AI_UNAVAILABLE_ERROR } from "../plan";
 import { auth } from "./auth";
 import { isSubscribed } from "./subscription";
+import { hasFreeAccess, isAdmin } from "./freeAccess";
 import { ApiError } from "./apiError";
 
 // Which key pays for an AI call. The app's own AI Router key comes first, for
-// signed-in users on the monthly plan; everyone else uses the key they
-// entered in Settings.
+// signed-in users on the monthly plan or given free use by the admin;
+// everyone else uses the key they entered in Settings.
 // The router key never leaves the server.
 
 // The only model run on the app's key
@@ -80,9 +81,11 @@ async function systemAIUser(headers: Headers): Promise<string | null> {
   }
   if (!session) return null;
   try {
-    return (await isSubscribed(session.user.id)) ? session.user.id : null;
+    // The paid plan first: a failing free list does not stop those who paid
+    if (isAdmin(session.user) || (await isSubscribed(session.user.id))) return session.user.id;
+    return (await hasFreeAccess(session.user)) ? session.user.id : null;
   } catch (e) {
-    console.error(`[plan] subscription check failed: ${e instanceof Error ? e.message : e}`);
+    console.error(`[plan] plan or free access check failed: ${e instanceof Error ? e.message : e}`);
     throw new PlanCheckError();
   }
 }

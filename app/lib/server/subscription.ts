@@ -60,7 +60,8 @@ function paymentSettings() {
   return { account, bank, accountName: ACCOUNT_NAME };
 }
 
-export async function subscriptionStatus(userId: string): Promise<SubscriptionStatus> {
+// The paid plan alone (free use is added by the route)
+export async function subscriptionStatus(userId: string): Promise<Omit<SubscriptionStatus, "free" | "admin">> {
   const { code, paidUntil } = await paymentCode(userId);
   const until = paidUntil ? paidUntil.getTime() : null;
   const settings = paymentSettings();
