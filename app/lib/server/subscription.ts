@@ -61,7 +61,7 @@ function paymentSettings() {
 }
 
 // The paid plan alone (free use is added by the route)
-export async function subscriptionStatus(userId: string): Promise<Omit<SubscriptionStatus, "free" | "admin">> {
+export async function subscriptionStatus(userId: string): Promise<Omit<SubscriptionStatus, "free" | "admin" | "ownKey">> {
   const { code, paidUntil } = await paymentCode(userId);
   const until = paidUntil ? paidUntil.getTime() : null;
   const settings = paymentSettings();

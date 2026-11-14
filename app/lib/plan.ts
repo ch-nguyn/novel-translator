@@ -14,6 +14,8 @@ export interface SubscriptionStatus {
   free: boolean;
   // May give free use to others (the Account tab's admin section)
   admin: boolean;
+  // Chose to translate with their own API key instead of the app's AI (the admin only)
+  ownKey: boolean;
   // Milliseconds; null when never paid
   paidUntil: number | null;
   // How to pay; null when payments are not set up

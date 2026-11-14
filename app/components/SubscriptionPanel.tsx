@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Translations } from "../lib/i18n";
 import { PLAN_DAYS, PLAN_OPEN, PLAN_PRICE_VND, SubscriptionStatus } from "../lib/plan";
 import AdminPanel from "./AdminPanel";
+import Switch from "./Switch";
 
 interface Props {
   textColor: string;
@@ -37,6 +38,9 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
   // The last check for the transfer failed (offline...)
   const [checkFailed, setCheckFailed] = useState(false);
   const [slow, setSlow] = useState(false);
+  // The admin's choice between the app's AI and their own key is being saved, or failed to
+  const [savingSource, setSavingSource] = useState(false);
+  const [sourceFailed, setSourceFailed] = useState(false);
   const onPaidRef = useRef(onPaid);
   onPaidRef.current = onPaid;
 
@@ -88,12 +92,45 @@ export default function SubscriptionPanel({ textColor, t, lang, onPaid }: Props)
 
   const admin = status?.admin ? <AdminPanel textColor={textColor} t={t} lang={lang} /> : null;
 
+  async function chooseSource(ownKey: boolean) {
+    if (savingSource) return;
+    setSavingSource(true);
+    setSourceFailed(false);
+    try {
+      const res = await fetch("/api/admin/own-key", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ownKey }),
+      });
+      if (!res.ok) throw new Error(`own-key ${res.status}`);
+      setStatus((current) => current && { ...current, ownKey });
+      // The app asks the server again what it translates with
+      onPaidRef.current();
+    } catch {
+      setSourceFailed(true);
+    } finally {
+      setSavingSource(false);
+    }
+  }
+
   // Free use, given by the admin: nothing to pay
   if (status?.free) {
     return (
       <>
         <section className="flex flex-col gap-2 p-4 rounded-xl border" style={{ borderColor: textColor + "25" }} aria-label={t.planName}>
-          <p className="text-sm font-medium text-green-600">{t.freeAccessActive}</p>
+          <p className={`text-sm font-medium ${status.ownKey ? "" : "text-green-600"}`}>{status.ownKey ? t.ownKeyActive : t.freeAccessActive}</p>
+          {status.admin && (
+            <div className={savingSource ? "opacity-60 pointer-events-none" : undefined}>
+              <Switch
+                label={t.systemAIToggle}
+                checked={!status.ownKey}
+                onChange={(on) => chooseSource(!on)}
+                textColor={textColor}
+                note={t.systemAIToggleNote}
+              />
+            </div>
+          )}
+          {sourceFailed && <p role="alert" className="text-sm text-red-600">{t.adminFailed}</p>}
         </section>
         {admin}
       </>

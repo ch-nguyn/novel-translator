@@ -54,3 +54,14 @@ export async function addFreeAccess(email: string, addedBy: string): Promise<voi
 export async function removeFreeAccess(email: string): Promise<void> {
   await pool.query(`delete from "free_access" where "email" = $1`, [email]);
 }
+
+// The user chose to translate with their own API key rather than the app's AI
+export async function usesOwnKey(userId: string): Promise<boolean> {
+  const { rows } = await pool.query(`select 1 from "own_key_choice" where "user_id" = $1`, [userId]);
+  return rows.length > 0;
+}
+
+export async function setUsesOwnKey(userId: string, on: boolean): Promise<void> {
+  if (on) await pool.query(`insert into "own_key_choice" ("user_id") values ($1) on conflict ("user_id") do nothing`, [userId]);
+  else await pool.query(`delete from "own_key_choice" where "user_id" = $1`, [userId]);
+}
